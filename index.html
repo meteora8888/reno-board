@@ -36,6 +36,7 @@
             </div>
             <div class="topbar-actions">
                 <button id="add-task-btn" class="btn btn-primary small">+ Task</button>
+                <button id="import-btn" class="btn btn-ghost small" title="Import tasks from TSV">Import</button>
                 <button id="refresh-btn" class="btn btn-ghost small" title="Refresh from spreadsheet">↻</button>
                 <button id="signout-btn" class="btn btn-ghost small" title="Sign out">Sign out</button>
             </div>
@@ -112,6 +113,21 @@
                     <button type="submit" id="save-btn" class="btn btn-primary">Save</button>
                 </div>
             </form>
+        </div>
+    </div>
+
+    <!-- ============ IMPORT MODAL ============ -->
+    <div id="import-backdrop" class="modal-backdrop hidden">
+        <div class="modal card" role="dialog" aria-modal="true" aria-labelledby="import-title">
+            <h2 id="import-title">Import tasks (TSV)</h2>
+            <p class="hint" style="margin-top:4px">Paste tab-separated rows. The first row must be a header containing at least <strong>Title</strong>; recognized columns (any order): ID, Title, Status, Room, Contractor, Cost Estimate, Cost Actual, Due Date, Priority, Notes, Epic. Missing IDs and timestamps are generated; rows with an existing ID are skipped.</p>
+            <textarea id="import-text" rows="10" spellcheck="false" placeholder="Title&#9;Status&#9;Room&#9;Epic&#10;Tile the shower&#9;Planned&#9;Bathroom&#9;Bathroom renovation"></textarea>
+            <p id="import-preview" class="hint" aria-live="polite"></p>
+            <div class="modal-actions">
+                <span class="spacer"></span>
+                <button type="button" id="import-cancel-btn" class="btn btn-ghost">Cancel</button>
+                <button type="button" id="import-confirm-btn" class="btn btn-primary" disabled>Import</button>
+            </div>
         </div>
     </div>
 

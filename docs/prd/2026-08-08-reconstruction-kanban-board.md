@@ -29,7 +29,7 @@ Reconstruction tasks live in a spreadsheet because it's easy to enter data and s
 - **No budget analytics** beyond showing cost fields on cards and simple per-column/room totals; this is not a budgeting tool.
 - **No public or anonymous access** — the board is useless without signing in with an authorized Google account; there is no read-only guest mode.
 - **No offline editing.** The board requires connectivity; it is not a PWA with sync.
-- **No migration tooling** — the spreadsheet starts from the schema this PRD defines; there is no importer for pre-existing sheets.
+- ~~**No migration tooling** — the spreadsheet starts from the schema this PRD defines; there is no importer for pre-existing sheets.~~ *(Superseded 2026-08-09 by R14: TSV paste import.)*
 
 ## User Stories
 
@@ -56,6 +56,7 @@ Reconstruction tasks live in a spreadsheet because it's easy to enter data and s
 11. **R11 — Mobile-usable.** All flows in R4–R10 work on a phone-sized screen, including moving a card between columns without drag-and-drop.
 12. **R12 — Multi-user.** The owner and partner/family accounts (added as spreadsheet editors and, while the OAuth app is in testing mode, as test users) all get identical full edit capability. Two people using the board at once must not corrupt each other's rows (guaranteed by R7).
 13. **R13 — Epics as labels.** Each task can carry a free-text `Epic` label grouping related tasks. Cards display it as a tag; the board can filter by epic, showing done-count and cost totals for the group. No hierarchy, roll-up statuses, or subtasks.
+14. **R14 — TSV import.** The board can import tasks from pasted TSV. The first row must be a header naming at least `Title`; recognized columns map by name in any order, unknown columns are ignored. Missing IDs/timestamps are generated; rows whose ID already exists are skipped; malformed costs/dates and unknown statuses/rooms/priorities produce warnings shown before import, never silent data mangling. All parsed rows are appended in a single write.
 
 ## UX Notes
 
@@ -91,3 +92,4 @@ Reconstruction tasks live in a spreadsheet because it's easy to enter data and s
 | 2026-08-08 | Archive tab instead of delete | Preserves history for a long-running project while keeping the board clean. |
 | 2026-08-09 | Client + spreadsheet IDs hardcoded; config UI removed | Single-household tool with one fixed datasource; app auto-creates missing tabs in the user's existing spreadsheet instead of creating new spreadsheets. |
 | 2026-08-09 | Epics as free-text labels (R13), rejected real parent/subtask hierarchy | Hierarchy fights the flat-row sheet model and kanban form; labels + filter give the grouping/progress view at a fraction of the complexity. |
+| 2026-08-09 | TSV paste import (R14) supersedes the "no migration tooling" non-goal | The user migrates their pre-existing task list via LLM-generated TSV; paste-with-preview is the cheapest safe path in. |

@@ -26,6 +26,12 @@ PRD: [docs/prd/2026-08-08-reconstruction-kanban-board.md](docs/prd/2026-08-08-re
 You can always edit the spreadsheet directly in Google Sheets; the board picks the
 changes up on the next refresh.
 
+**Import**: the Import button accepts pasted TSV. First row = header with at least
+`Title`; recognized columns (any order): ID, Title, Status, Room, Contractor,
+Cost Estimate, Cost Actual, Due Date, Priority, Notes, Epic. Missing IDs and
+timestamps are generated, duplicate IDs are skipped, and parse warnings are shown
+before anything is written.
+
 ## Deployment
 
 Live at **https://meteora8888.github.io/reno-board/** (GitHub Pages, `main` branch,

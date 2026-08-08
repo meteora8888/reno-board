@@ -87,6 +87,8 @@ input, select, textarea {
 }
 input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent); outline-offset: -1px; border-color: transparent; }
 textarea { resize: vertical; }
+#import-text { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; white-space: pre; margin-top: 10px; }
+#import-preview { margin-top: 8px; min-height: 16px; }
 
 .setup-fields { margin-bottom: 16px; text-align: left; }
 

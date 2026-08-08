@@ -660,6 +660,156 @@ async function onArchiveClick() {
 }
 
 // ---------------------------------------------------------------------------
+// TSV import
+// ---------------------------------------------------------------------------
+
+const HEADER_KEYS = {
+    id: 'id', title: 'title', status: 'status', room: 'room', contractor: 'contractor',
+    costestimate: 'costEst', estimate: 'costEst', costactual: 'costAct', actual: 'costAct',
+    duedate: 'due', due: 'due', priority: 'priority', notes: 'notes', epic: 'epic',
+    created: 'created', updated: 'updated',
+};
+
+function parseImportCost(raw, warnings, line) {
+    const text = raw.trim();
+    if (!text) return '';
+    let cleaned = text.replace(/[^0-9.,-]/g, '');
+    if (cleaned.includes('.') && cleaned.includes(',')) cleaned = cleaned.replace(/,/g, '');
+    else cleaned = cleaned.replace(',', '.');
+    const n = Number(cleaned);
+    if (!/\d/.test(cleaned) || !Number.isFinite(n)) {
+        warnings.push(`line ${line}: unreadable cost "${text}"`);
+        return '';
+    }
+    return n;
+}
+
+function parseImportDate(raw, warnings, line) {
+    const text = raw.trim();
+    if (!text) return '';
+    if (/^\d{4}-\d{2}-\d{2}/.test(text)) return text.slice(0, 10);
+    const dmy = text.match(/^(\d{1,2})[./](\d{1,2})[./](\d{4})/);
+    if (dmy) return `${dmy[3]}-${dmy[2].padStart(2, '0')}-${dmy[1].padStart(2, '0')}`;
+    const d = new Date(text);
+    if (!Number.isNaN(d.getTime())) return d.toISOString().slice(0, 10);
+    warnings.push(`line ${line}: unreadable date "${text}"`);
+    return '';
+}
+
+/** Parse pasted TSV into task objects. Returns {tasks, warnings, error}. */
+function parseTSV(text) {
+    const warnings = [];
+    const lines = text.split(/\r?\n/).map(l => l.replace(/\r/g, '')).filter(l => l.trim() !== '');
+    if (!lines.length) return { tasks: [], warnings, error: null };
+
+    const headers = lines[0].split('\t').map(h => HEADER_KEYS[h.trim().toLowerCase().replace(/[^a-z]/g, '')] || null);
+    if (!headers.includes('title')) {
+        return { tasks: [], warnings, error: 'First row must be a header containing a "Title" column.' };
+    }
+
+    const existingIds = new Set(state.tasks.map(t => t.id));
+    const seenIds = new Set();
+    const now = nowStamp();
+    const tasks = [];
+
+    for (let i = 1; i < lines.length; i++) {
+        const line = i + 1;
+        const cells = lines[i].split('\t');
+        const raw = {};
+        headers.forEach((key, c) => { if (key) raw[key] = (cells[c] ?? '').trim(); });
+
+        if (!raw.title) { warnings.push(`line ${line}: no title — skipped`); continue; }
+        if (raw.id && (existingIds.has(raw.id) || seenIds.has(raw.id))) {
+            warnings.push(`line ${line}: ID ${raw.id} already exists — skipped`);
+            continue;
+        }
+        const id = raw.id || `T-${Date.now().toString(36)}-${i}${Math.random().toString(36).slice(2, 4)}`;
+        seenIds.add(id);
+
+        let status = raw.status || state.statuses[0];
+        const canonical = state.statuses.find(s => s.toLowerCase() === status.toLowerCase());
+        if (canonical) status = canonical;
+        else warnings.push(`line ${line}: status "${status}" is not in Config — card will land in an extra column`);
+
+        let priority = raw.priority || '';
+        const prioCanonical = ['High', 'Medium', 'Low'].find(p => p.toLowerCase() === priority.toLowerCase());
+        if (priority && !prioCanonical) warnings.push(`line ${line}: priority "${priority}" is not High/Medium/Low`);
+        if (prioCanonical) priority = prioCanonical;
+
+        if (raw.room && !state.rooms.includes(raw.room)) {
+            warnings.push(`line ${line}: room "${raw.room}" is not in Config`);
+        }
+
+        tasks.push({
+            id,
+            title: raw.title,
+            status,
+            room: raw.room || '',
+            contractor: raw.contractor || '',
+            costEst: parseImportCost(raw.costEst || '', warnings, line),
+            costAct: parseImportCost(raw.costAct || '', warnings, line),
+            due: parseImportDate(raw.due || '', warnings, line),
+            priority,
+            notes: raw.notes || '',
+            created: raw.created || now,
+            updated: raw.updated || now,
+            epic: raw.epic || '',
+        });
+    }
+    return { tasks, warnings, error: null };
+}
+
+function openImportModal() {
+    $('import-text').value = '';
+    $('import-preview').textContent = '';
+    $('import-confirm-btn').disabled = true;
+    $('import-backdrop').classList.remove('hidden');
+    $('import-text').focus();
+}
+
+function closeImportModal() {
+    $('import-backdrop').classList.add('hidden');
+}
+
+function previewImport() {
+    const { tasks, warnings, error } = parseTSV($('import-text').value);
+    const preview = $('import-preview');
+    if (error) {
+        preview.textContent = error;
+        $('import-confirm-btn').disabled = true;
+        return;
+    }
+    const parts = [];
+    if (tasks.length) parts.push(`${tasks.length} task${tasks.length === 1 ? '' : 's'} ready to import`);
+    parts.push(...warnings.slice(0, 5));
+    if (warnings.length > 5) parts.push(`…and ${warnings.length - 5} more warnings`);
+    preview.textContent = parts.join(' · ');
+    $('import-confirm-btn').disabled = !tasks.length;
+    $('import-confirm-btn').textContent = tasks.length ? `Import ${tasks.length}` : 'Import';
+}
+
+async function confirmImport() {
+    const { tasks } = parseTSV($('import-text').value);
+    if (!tasks.length) return;
+    $('import-confirm-btn').disabled = true;
+    try {
+        await api(`/${SHEET_ID}/values/Tasks!A:M:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS`, {
+            method: 'POST',
+            body: { values: tasks.map(taskToRow) },
+        });
+        state.tasks.push(...tasks);
+        closeImportModal();
+        renderFilters();
+        renderBoard();
+        toast(`Imported ${tasks.length} task${tasks.length === 1 ? '' : 's'}.`, 'success');
+    } catch (err) {
+        toast(err.message, 'error');
+    } finally {
+        $('import-confirm-btn').disabled = false;
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Wiring
 // ---------------------------------------------------------------------------
 
@@ -671,6 +821,12 @@ function init() {
     $('add-task-btn').addEventListener('click', () => openTaskModal(null));
     $('signout-btn').addEventListener('click', signOut);
 
+    $('import-btn').addEventListener('click', openImportModal);
+    $('import-text').addEventListener('input', previewImport);
+    $('import-cancel-btn').addEventListener('click', closeImportModal);
+    $('import-confirm-btn').addEventListener('click', confirmImport);
+    $('import-backdrop').addEventListener('click', (e) => { if (e.target === $('import-backdrop')) closeImportModal(); });
+
     $('filter-epic').addEventListener('change', (e) => { state.filterEpic = e.target.value; renderBoard(); });
     $('filter-room').addEventListener('change', (e) => { state.filterRoom = e.target.value; renderBoard(); });
     $('filter-contractor').addEventListener('change', (e) => { state.filterContractor = e.target.value; renderBoard(); });
@@ -681,7 +837,7 @@ function init() {
     $('modal-backdrop').addEventListener('click', (e) => { if (e.target === $('modal-backdrop')) closeTaskModal(); });
 
     document.addEventListener('keydown', (e) => {
-        if (e.key === 'Escape') closeTaskModal();
+        if (e.key === 'Escape') { closeTaskModal(); closeImportModal(); }
     });
 
     // PRD R8: pick up direct spreadsheet edits when the tab regains focus.
