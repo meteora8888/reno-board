@@ -9,8 +9,10 @@ PRD: [docs/prd/2026-08-08-reconstruction-kanban-board.md](docs/prd/2026-08-08-re
 
 ## How it works
 
-- `Tasks` tab is the source of truth. Columns `A..L`:
-  `ID, Title, Status, Room, Contractor, Cost Estimate, Cost Actual, Due Date, Priority, Notes, Created, Updated`
+- `Tasks` tab is the source of truth. Columns `A..M`:
+  `ID, Title, Status, Room, Contractor, Cost Estimate, Cost Actual, Due Date, Priority, Notes, Created, Updated, Epic`
+- `Epic` is a free-text label grouping related tasks (e.g. "Bathroom renovation");
+  the board shows it as a card tag and a filter with done-count and cost totals.
 - `Config` tab drives the board: column **A** = ordered statuses (board columns),
   column **B** = rooms. Rename/reorder there — no code change needed. The last
   status in the list is treated as "done" (no overdue highlighting).

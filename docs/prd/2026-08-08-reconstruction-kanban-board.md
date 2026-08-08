@@ -55,6 +55,7 @@ Reconstruction tasks live in a spreadsheet because it's easy to enter data and s
 10. **R10 — Delete/archive.** A task can be archived from the board (moved to an `Archive` tab in the sheet), keeping the `Tasks` tab clean without losing history. Hard delete only happens in Sheets directly.
 11. **R11 — Mobile-usable.** All flows in R4–R10 work on a phone-sized screen, including moving a card between columns without drag-and-drop.
 12. **R12 — Multi-user.** The owner and partner/family accounts (added as spreadsheet editors and, while the OAuth app is in testing mode, as test users) all get identical full edit capability. Two people using the board at once must not corrupt each other's rows (guaranteed by R7).
+13. **R13 — Epics as labels.** Each task can carry a free-text `Epic` label grouping related tasks. Cards display it as a tag; the board can filter by epic, showing done-count and cost totals for the group. No hierarchy, roll-up statuses, or subtasks.
 
 ## UX Notes
 
@@ -88,3 +89,5 @@ Reconstruction tasks live in a spreadsheet because it's easy to enter data and s
 | 2026-08-08 | Google auth via browser-side OAuth, no backend, GitHub Pages hosting | User constraint; proven by GoodMetrics/LogenEditor. Keeps secrets out of the repo (only client ID + sheet ID are public) and hosting free. |
 | 2026-08-08 | Full edit rights for all users; no roles/guest mode | Only owner + partner/family use it; access control delegated to Google's own sheet permissions. |
 | 2026-08-08 | Archive tab instead of delete | Preserves history for a long-running project while keeping the board clean. |
+| 2026-08-09 | Client + spreadsheet IDs hardcoded; config UI removed | Single-household tool with one fixed datasource; app auto-creates missing tabs in the user's existing spreadsheet instead of creating new spreadsheets. |
+| 2026-08-09 | Epics as free-text labels (R13), rejected real parent/subtask hierarchy | Hierarchy fights the flat-row sheet model and kanban form; labels + filter give the grouping/progress view at a fraction of the complexity. |

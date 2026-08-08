@@ -29,6 +29,7 @@
                 <a id="open-sheet-link" class="hint-link" target="_blank" rel="noopener">open sheet ↗</a>
             </div>
             <div class="topbar-filters">
+                <select id="filter-epic" title="Filter by epic"><option value="">All epics</option></select>
                 <select id="filter-room" title="Filter by room"><option value="">All rooms</option></select>
                 <select id="filter-contractor" title="Filter by contractor"><option value="">All contractors</option></select>
                 <span id="cost-summary" class="cost-summary"></span>
@@ -54,6 +55,10 @@
             <form id="task-form">
                 <label class="field-label" for="f-title">Title *</label>
                 <input id="f-title" type="text" required autocomplete="off">
+
+                <label class="field-label" for="f-epic">Epic</label>
+                <input id="f-epic" type="text" autocomplete="off" list="epic-list" placeholder="e.g. Bathroom renovation">
+                <datalist id="epic-list"></datalist>
 
                 <div class="form-row">
                     <div>
