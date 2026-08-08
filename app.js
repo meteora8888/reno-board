@@ -37,6 +37,7 @@ const state = {
     filterRoom: '',
     filterContractor: '',
     filterEpic: '',
+    searchText: '',
     editingId: null,    // task being edited in the modal, null = new task
     lastLoadAt: 0,
 };
@@ -360,11 +361,23 @@ function terminalStatus() {
     return state.statuses[state.statuses.length - 1];
 }
 
+// Accent-insensitive fold so "buracie" matches "Búracie".
+function fold(text) {
+    return text.normalize('NFD').replace(/\p{M}/gu, '').toLowerCase();
+}
+
+function matchesSearch(task, needle) {
+    return [task.title, task.notes, task.contractor, task.epic, task.room]
+        .some(field => field && fold(field).includes(needle));
+}
+
 function visibleTasks() {
+    const needle = fold(state.searchText.trim());
     return state.tasks.filter(t =>
         (!state.filterRoom || t.room === state.filterRoom) &&
         (!state.filterContractor || t.contractor === state.filterContractor) &&
-        (!state.filterEpic || t.epic === state.filterEpic));
+        (!state.filterEpic || t.epic === state.filterEpic) &&
+        (!needle || matchesSearch(t, needle)));
 }
 
 function taskSort(a, b) {
@@ -707,7 +720,7 @@ function parseTSV(text) {
         return { tasks: [], warnings, error: 'First row must be a header containing a "Title" column.' };
     }
 
-    const existingIds = new Set(state.tasks.map(t => t.id));
+    const existingById = new Map(state.tasks.map(t => [t.id, t]));
     const seenIds = new Set();
     const now = nowStamp();
     const tasks = [];
@@ -719,10 +732,11 @@ function parseTSV(text) {
         headers.forEach((key, c) => { if (key) raw[key] = (cells[c] ?? '').trim(); });
 
         if (!raw.title) { warnings.push(`line ${line}: no title — skipped`); continue; }
-        if (raw.id && (existingIds.has(raw.id) || seenIds.has(raw.id))) {
-            warnings.push(`line ${line}: ID ${raw.id} already exists — skipped`);
+        if (raw.id && seenIds.has(raw.id)) {
+            warnings.push(`line ${line}: ID ${raw.id} appears twice in the paste — skipped`);
             continue;
         }
+        const existing = raw.id ? existingById.get(raw.id) : undefined;
         const id = raw.id || `T-${Date.now().toString(36)}-${i}${Math.random().toString(36).slice(2, 4)}`;
         seenIds.add(id);
 
@@ -751,9 +765,10 @@ function parseTSV(text) {
             due: parseImportDate(raw.due || '', warnings, line),
             priority,
             notes: raw.notes || '',
-            created: raw.created || now,
-            updated: raw.updated || now,
+            created: raw.created || existing?.created || now,
+            updated: now,
             epic: raw.epic || '',
+            isUpdate: !!existing,
         });
     }
     return { tasks, warnings, error: null };
@@ -779,8 +794,11 @@ function previewImport() {
         $('import-confirm-btn').disabled = true;
         return;
     }
+    const news = tasks.filter(t => !t.isUpdate).length;
+    const updates = tasks.length - news;
     const parts = [];
-    if (tasks.length) parts.push(`${tasks.length} task${tasks.length === 1 ? '' : 's'} ready to import`);
+    if (news) parts.push(`${news} new`);
+    if (updates) parts.push(`${updates} update${updates === 1 ? '' : 's'} (existing IDs will be overwritten)`);
     parts.push(...warnings.slice(0, 5));
     if (warnings.length > 5) parts.push(`…and ${warnings.length - 5} more warnings`);
     preview.textContent = parts.join(' · ');
@@ -793,15 +811,33 @@ async function confirmImport() {
     if (!tasks.length) return;
     $('import-confirm-btn').disabled = true;
     try {
-        await api(`/${SHEET_ID}/values/Tasks!A:M:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS`, {
-            method: 'POST',
-            body: { values: tasks.map(taskToRow) },
-        });
-        state.tasks.push(...tasks);
+        // Fresh row map so updates land on the row that holds each ID right now (PRD R7).
+        const fresh = await api(`/${SHEET_ID}/values/Tasks!A2:M?valueRenderOption=UNFORMATTED_VALUE`);
+        const rowById = new Map((fresh.values || []).map((r, i) => [fromCell(r[0]), i + 2]));
+
+        const toAppend = [];
+        const patches = [];
+        for (const task of tasks) {
+            delete task.isUpdate;
+            const rowNumber = rowById.get(task.id);
+            if (rowNumber) patches.push({ range: `Tasks!A${rowNumber}:M${rowNumber}`, values: [taskToRow(task)] });
+            else toAppend.push(task);
+        }
+        if (patches.length) {
+            await api(`/${SHEET_ID}/values:batchUpdate`, {
+                method: 'POST',
+                body: { valueInputOption: 'RAW', data: patches },
+            });
+        }
+        if (toAppend.length) {
+            await api(`/${SHEET_ID}/values/Tasks!A:M:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS`, {
+                method: 'POST',
+                body: { values: toAppend.map(taskToRow) },
+            });
+        }
         closeImportModal();
-        renderFilters();
-        renderBoard();
-        toast(`Imported ${tasks.length} task${tasks.length === 1 ? '' : 's'}.`, 'success');
+        await refresh(true);
+        toast(`Imported ${toAppend.length} new, updated ${patches.length}.`, 'success');
     } catch (err) {
         toast(err.message, 'error');
     } finally {
@@ -827,6 +863,7 @@ function init() {
     $('import-confirm-btn').addEventListener('click', confirmImport);
     $('import-backdrop').addEventListener('click', (e) => { if (e.target === $('import-backdrop')) closeImportModal(); });
 
+    $('search-input').addEventListener('input', (e) => { state.searchText = e.target.value; renderBoard(); });
     $('filter-epic').addEventListener('change', (e) => { state.filterEpic = e.target.value; renderBoard(); });
     $('filter-room').addEventListener('change', (e) => { state.filterRoom = e.target.value; renderBoard(); });
     $('filter-contractor').addEventListener('change', (e) => { state.filterContractor = e.target.value; renderBoard(); });

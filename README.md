@@ -29,8 +29,11 @@ changes up on the next refresh.
 **Import**: the Import button accepts pasted TSV. First row = header with at least
 `Title`; recognized columns (any order): ID, Title, Status, Room, Contractor,
 Cost Estimate, Cost Actual, Due Date, Priority, Notes, Epic. Missing IDs and
-timestamps are generated, duplicate IDs are skipped, and parse warnings are shown
-before anything is written.
+timestamps are generated. Import is an **upsert**: rows whose ID already exists
+overwrite that task in place (re-pasting a corrected TSV is the intended way to
+fix bulk mistakes); parse warnings are shown before anything is written. The
+search bar filters cards accent-insensitively across title, notes, contractor,
+epic and room.
 
 ## Deployment
 
