@@ -29,7 +29,7 @@ const SPREADSHEET_TITLE = 'Reno Board — house reconstruction';
 
 // Set this once the OAuth client for the GitHub Pages origin exists; users can
 // still override it from the login view / settings (stored in localStorage).
-const DEFAULT_CLIENT_ID = '';
+const DEFAULT_CLIENT_ID = '912696421333-2u23vokjb2cr44g2s7ms1pgg75eu9dhi.apps.googleusercontent.com';
 
 const LS_CLIENT_ID = 'rb_client_id';
 const LS_SHEET_ID = 'rb_sheet_id';
