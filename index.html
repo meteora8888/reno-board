@@ -16,31 +16,8 @@
             <h1 class="brand">Reno Board</h1>
             <p class="muted">A kanban board for the house reconstruction. Tasks live in a Google Spreadsheet — the browser talks to Google directly, nothing is stored anywhere else.</p>
 
-            <div id="setup-config" class="setup-fields hidden">
-                <label class="field-label" for="client-id-input">Google OAuth Client ID</label>
-                <input id="client-id-input" type="text" placeholder="1234-abc.apps.googleusercontent.com" autocomplete="off" spellcheck="false">
-                <p class="hint">From the Google Cloud console (see README). Stored only in this browser.</p>
-            </div>
-
             <button id="signin-btn" class="btn btn-primary">Sign in with Google</button>
-            <button id="show-config-btn" class="btn btn-ghost small">Configure client ID</button>
             <p class="hint">Sign in with a Google account that can edit the reconstruction spreadsheet.</p>
-        </div>
-    </main>
-
-    <!-- ============ SHEET PICKER (first run after sign-in) ============ -->
-    <main id="sheet-view" class="view center-view hidden">
-        <div class="card login-card">
-            <h1 class="brand">Connect a spreadsheet</h1>
-            <p class="muted">The board needs its datasource. Create a fresh spreadsheet with the right tabs, or paste the ID of one that already has them.</p>
-
-            <button id="create-sheet-btn" class="btn btn-primary">Create new spreadsheet</button>
-
-            <div class="divider"><span>or</span></div>
-
-            <label class="field-label" for="sheet-id-input">Existing spreadsheet ID</label>
-            <input id="sheet-id-input" type="text" placeholder="1AbC…xyz (from the sheet URL)" autocomplete="off" spellcheck="false">
-            <button id="use-sheet-btn" class="btn btn-secondary">Use this spreadsheet</button>
         </div>
     </main>
 
@@ -59,7 +36,7 @@
             <div class="topbar-actions">
                 <button id="add-task-btn" class="btn btn-primary small">+ Task</button>
                 <button id="refresh-btn" class="btn btn-ghost small" title="Refresh from spreadsheet">↻</button>
-                <button id="settings-btn" class="btn btn-ghost small" title="Settings">⚙</button>
+                <button id="signout-btn" class="btn btn-ghost small" title="Sign out">Sign out</button>
             </div>
         </header>
 
@@ -130,23 +107,6 @@
                     <button type="submit" id="save-btn" class="btn btn-primary">Save</button>
                 </div>
             </form>
-        </div>
-    </div>
-
-    <!-- ============ SETTINGS MODAL ============ -->
-    <div id="settings-backdrop" class="modal-backdrop hidden">
-        <div class="modal card" role="dialog" aria-modal="true">
-            <h2>Settings</h2>
-            <label class="field-label" for="s-client-id">OAuth Client ID</label>
-            <input id="s-client-id" type="text" autocomplete="off" spellcheck="false">
-            <label class="field-label" for="s-sheet-id">Spreadsheet ID</label>
-            <input id="s-sheet-id" type="text" autocomplete="off" spellcheck="false">
-            <div class="modal-actions">
-                <button type="button" id="signout-btn" class="btn btn-danger small">Sign out</button>
-                <span class="spacer"></span>
-                <button type="button" id="settings-cancel-btn" class="btn btn-ghost">Cancel</button>
-                <button type="button" id="settings-save-btn" class="btn btn-primary">Save</button>
-            </div>
         </div>
     </div>
 

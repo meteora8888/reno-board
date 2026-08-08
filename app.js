@@ -5,7 +5,7 @@
  *
  * Auth model (same as GoodMetrics): Google Identity Services issues a browser-side
  * OAuth access token; the page calls the Sheets REST API directly. No backend,
- * nothing stored outside the spreadsheet except client/sheet IDs in localStorage.
+ * nothing stored outside the spreadsheet. Client and spreadsheet IDs are hardcoded.
  *
  * Datasource contract (PRD R3):
  *   Tasks tab   — columns A..L: ID, Title, Status, Room, Contractor, Cost Estimate,
@@ -25,18 +25,11 @@ const TASK_HEADERS = ['ID', 'Title', 'Status', 'Room', 'Contractor', 'Cost Estim
 const DEFAULT_STATUSES = ['Backlog', 'Planned', 'In Progress', 'Blocked', 'Done'];
 const DEFAULT_ROOMS = ['Kitchen', 'Living room', 'Bedroom', 'Bathroom', 'Hallway', 'Exterior', 'Whole house'];
 const PRIORITY_ORDER = { High: 0, Medium: 1, Low: 2 };
-const SPREADSHEET_TITLE = 'Reno Board — house reconstruction';
 
-// Set this once the OAuth client for the GitHub Pages origin exists; users can
-// still override it from the login view / settings (stored in localStorage).
-const DEFAULT_CLIENT_ID = '912696421333-2u23vokjb2cr44g2s7ms1pgg75eu9dhi.apps.googleusercontent.com';
-
-const LS_CLIENT_ID = 'rb_client_id';
-const LS_SHEET_ID = 'rb_sheet_id';
+const CLIENT_ID = '912696421333-2u23vokjb2cr44g2s7ms1pgg75eu9dhi.apps.googleusercontent.com';
+const SHEET_ID = '1Ks840Vx-JlLiaSgfmIAo0Satly7wne-9qurs6QZRGtI';
 
 const state = {
-    clientId: localStorage.getItem(LS_CLIENT_ID) || DEFAULT_CLIENT_ID,
-    sheetId: localStorage.getItem(LS_SHEET_ID) || '',
     token: null,
     tasks: [],          // [{id, title, status, room, contractor, costEst, costAct, due, priority, notes, created, updated}]
     statuses: DEFAULT_STATUSES,
@@ -66,7 +59,7 @@ function ensureTokenClient() {
         return false;
     }
     tokenClient = google.accounts.oauth2.initTokenClient({
-        client_id: state.clientId,
+        client_id: CLIENT_ID,
         scope: SCOPES,
         callback: onToken,
     });
@@ -74,11 +67,6 @@ function ensureTokenClient() {
 }
 
 function signIn(prompt) {
-    if (!state.clientId) {
-        $('setup-config').classList.remove('hidden');
-        toast('Enter the OAuth Client ID first (see README for setup).', 'error');
-        return;
-    }
     if (!ensureTokenClient()) return;
     tokenClient.requestAccessToken({ prompt: prompt ?? 'select_account' });
 }
@@ -91,10 +79,6 @@ async function onToken(response) {
     }
     state.token = response.access_token;
     $('stale-banner').classList.add('hidden');
-    if (!state.sheetId) {
-        showView('sheet-view');
-        return;
-    }
     await enterBoard();
 }
 
@@ -102,7 +86,6 @@ function signOut() {
     if (state.token && gisReady()) google.accounts.oauth2.revoke(state.token, () => {});
     state.token = null;
     state.tasks = [];
-    closeSettings();
     showView('login-view');
 }
 
@@ -135,7 +118,7 @@ async function api(path, { method = 'GET', body = null } = {}) {
         const msg = res.status === 403
             ? 'No access to this spreadsheet. Sign in with an account that can edit it.'
             : res.status === 404
-                ? 'Spreadsheet not found — check the spreadsheet ID in settings.'
+                ? 'Spreadsheet not found — was it deleted or moved?'
                 : `Google Sheets error (${res.status}). ${detail}`;
         throw new ApiError(msg, res.status);
     }
@@ -190,7 +173,7 @@ const nowStamp = () => new Date().toISOString();
 
 async function loadAll() {
     const ranges = 'ranges=Tasks!A2:L&ranges=Config!A2:B';
-    const data = await api(`/${state.sheetId}/values:batchGet?${ranges}&valueRenderOption=UNFORMATTED_VALUE`);
+    const data = await api(`/${SHEET_ID}/values:batchGet?${ranges}&valueRenderOption=UNFORMATTED_VALUE`);
     const [taskValues, configValues] = data.valueRanges.map(v => v.values || []);
     state.tasks = taskValues.filter(r => fromCell(r[0])).map(parseTaskRow);
     const statuses = configValues.map(r => fromCell(r[0])).filter(Boolean);
@@ -202,7 +185,7 @@ async function loadAll() {
 
 /** Re-read the Tasks tab and find a task's current row by ID (PRD R7). */
 async function locateTask(id) {
-    const data = await api(`/${state.sheetId}/values/Tasks!A2:L?valueRenderOption=UNFORMATTED_VALUE`);
+    const data = await api(`/${SHEET_ID}/values/Tasks!A2:L?valueRenderOption=UNFORMATTED_VALUE`);
     const rows = data.values || [];
     const idx = rows.findIndex(r => fromCell(r[0]) === id);
     if (idx === -1) return null;
@@ -218,7 +201,7 @@ async function writeTask(original, changes) {
         throw new ConflictError('This task changed in the spreadsheet since you loaded it.');
     }
     const merged = { ...loc.remote, ...changes, updated: nowStamp() };
-    await api(`/${state.sheetId}/values/Tasks!A${loc.rowNumber}:L${loc.rowNumber}?valueInputOption=RAW`, {
+    await api(`/${SHEET_ID}/values/Tasks!A${loc.rowNumber}:L${loc.rowNumber}?valueInputOption=RAW`, {
         method: 'PUT',
         body: { values: [taskToRow(merged)] },
     });
@@ -226,7 +209,7 @@ async function writeTask(original, changes) {
 }
 
 async function appendTask(task) {
-    await api(`/${state.sheetId}/values/Tasks!A:L:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS`, {
+    await api(`/${SHEET_ID}/values/Tasks!A:L:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS`, {
         method: 'POST',
         body: { values: [taskToRow(task)] },
     });
@@ -239,15 +222,15 @@ async function archiveTask(original) {
         throw new ConflictError('This task changed in the spreadsheet since you loaded it.');
     }
     const archived = { ...loc.remote, updated: nowStamp() };
-    await api(`/${state.sheetId}/values/Archive!A:L:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS`, {
+    await api(`/${SHEET_ID}/values/Archive!A:L:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS`, {
         method: 'POST',
         body: { values: [taskToRow(archived)] },
     });
     // Row numbers are 1-based, deleteDimension indices 0-based.
-    const meta = await api(`/${state.sheetId}?fields=sheets.properties`);
+    const meta = await api(`/${SHEET_ID}?fields=sheets.properties`);
     const tasksSheet = meta.sheets.find(s => s.properties.title === 'Tasks');
     if (!tasksSheet) throw new Error('Tasks tab not found in the spreadsheet.');
-    await api(`/${state.sheetId}:batchUpdate`, {
+    await api(`/${SHEET_ID}:batchUpdate`, {
         method: 'POST',
         body: {
             requests: [{
@@ -264,34 +247,36 @@ async function archiveTask(original) {
     });
 }
 
-async function createSpreadsheet() {
-    const created = await api('', {
+/**
+ * First-run provisioning: if the hardcoded spreadsheet is missing any of the
+ * Tasks/Config/Archive tabs, create them (existing tabs are left untouched).
+ * Returns true if anything was created.
+ */
+async function ensureTabs() {
+    const meta = await api(`/${SHEET_ID}?fields=sheets.properties`);
+    const existing = new Set(meta.sheets.map(s => s.properties.title));
+    const missing = ['Tasks', 'Config', 'Archive'].filter(t => !existing.has(t));
+    if (!missing.length) return false;
+
+    await api(`/${SHEET_ID}:batchUpdate`, {
         method: 'POST',
-        body: {
-            properties: { title: SPREADSHEET_TITLE },
-            sheets: [
-                { properties: { title: 'Tasks' } },
-                { properties: { title: 'Config' } },
-                { properties: { title: 'Archive' } },
-            ],
-        },
+        body: { requests: missing.map(title => ({ addSheet: { properties: { title } } })) },
     });
-    const id = created.spreadsheetId;
-    const configRows = [['Statuses', 'Rooms']];
-    const max = Math.max(DEFAULT_STATUSES.length, DEFAULT_ROOMS.length);
-    for (let i = 0; i < max; i++) configRows.push([DEFAULT_STATUSES[i] || '', DEFAULT_ROOMS[i] || '']);
-    await api(`/${id}/values:batchUpdate`, {
+
+    const data = [];
+    if (missing.includes('Tasks')) data.push({ range: 'Tasks!A1:L1', values: [TASK_HEADERS] });
+    if (missing.includes('Archive')) data.push({ range: 'Archive!A1:L1', values: [TASK_HEADERS] });
+    if (missing.includes('Config')) {
+        const configRows = [['Statuses', 'Rooms']];
+        const max = Math.max(DEFAULT_STATUSES.length, DEFAULT_ROOMS.length);
+        for (let i = 0; i < max; i++) configRows.push([DEFAULT_STATUSES[i] || '', DEFAULT_ROOMS[i] || '']);
+        data.push({ range: `Config!A1:B${configRows.length}`, values: configRows });
+    }
+    await api(`/${SHEET_ID}/values:batchUpdate`, {
         method: 'POST',
-        body: {
-            valueInputOption: 'RAW',
-            data: [
-                { range: 'Tasks!A1:L1', values: [TASK_HEADERS] },
-                { range: 'Archive!A1:L1', values: [TASK_HEADERS] },
-                { range: `Config!A1:B${configRows.length}`, values: configRows },
-            ],
-        },
+        body: { valueInputOption: 'RAW', data },
     });
-    return id;
+    return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -299,7 +284,7 @@ async function createSpreadsheet() {
 // ---------------------------------------------------------------------------
 
 function showView(id) {
-    for (const v of ['login-view', 'sheet-view', 'board-view']) {
+    for (const v of ['login-view', 'board-view']) {
         $(v).classList.toggle('hidden', v !== id);
     }
 }
@@ -314,7 +299,14 @@ function toast(message, kind = 'info', ms = 4200) {
 
 async function enterBoard() {
     showView('board-view');
-    $('open-sheet-link').href = `https://docs.google.com/spreadsheets/d/${state.sheetId}`;
+    $('open-sheet-link').href = `https://docs.google.com/spreadsheets/d/${SHEET_ID}`;
+    try {
+        if (await ensureTabs()) toast('Board tabs created in the spreadsheet.', 'success');
+    } catch (err) {
+        toast(err.message, 'error');
+        if (err instanceof ApiError && err.status === 403) showView('login-view');
+        return;
+    }
     await refresh(true);
 }
 
@@ -326,7 +318,7 @@ async function refresh(showErrors) {
     } catch (err) {
         if (showErrors || !(err instanceof ApiError)) toast(err.message, 'error');
         if (err instanceof ApiError && (err.status === 403 || err.status === 404)) {
-            showView(err.status === 404 ? 'sheet-view' : 'login-view');
+            showView('login-view');
         }
     }
 }
@@ -640,88 +632,16 @@ async function onArchiveClick() {
 }
 
 // ---------------------------------------------------------------------------
-// Settings
-// ---------------------------------------------------------------------------
-
-function openSettings() {
-    $('s-client-id').value = state.clientId;
-    $('s-sheet-id').value = state.sheetId;
-    $('settings-backdrop').classList.remove('hidden');
-}
-
-function closeSettings() {
-    $('settings-backdrop').classList.add('hidden');
-}
-
-function saveSettings() {
-    const clientId = $('s-client-id').value.trim();
-    const sheetId = parseSheetId($('s-sheet-id').value.trim());
-    const clientChanged = clientId !== state.clientId;
-    state.clientId = clientId;
-    state.sheetId = sheetId;
-    localStorage.setItem(LS_CLIENT_ID, clientId);
-    localStorage.setItem(LS_SHEET_ID, sheetId);
-    closeSettings();
-    if (clientChanged) {
-        tokenClient = null;
-        signOut();
-    } else if (state.token && sheetId) {
-        enterBoard();
-    } else {
-        showView(state.token ? 'sheet-view' : 'login-view');
-    }
-}
-
-/** Accept either a bare spreadsheet ID or a full docs.google.com URL. */
-function parseSheetId(text) {
-    const m = text.match(/\/spreadsheets\/d\/([A-Za-z0-9_-]+)/);
-    return m ? m[1] : text;
-}
-
-// ---------------------------------------------------------------------------
 // Wiring
 // ---------------------------------------------------------------------------
 
 function init() {
-    $('signin-btn').addEventListener('click', () => {
-        const typed = $('client-id-input').value.trim();
-        if (typed) {
-            state.clientId = typed;
-            localStorage.setItem(LS_CLIENT_ID, typed);
-            tokenClient = null;
-        }
-        signIn();
-    });
-    $('show-config-btn').addEventListener('click', () => {
-        $('setup-config').classList.toggle('hidden');
-        $('client-id-input').value = state.clientId;
-    });
+    $('signin-btn').addEventListener('click', () => signIn());
     $('reauth-btn').addEventListener('click', () => signIn(''));
-
-    $('create-sheet-btn').addEventListener('click', async () => {
-        $('create-sheet-btn').disabled = true;
-        try {
-            state.sheetId = await createSpreadsheet();
-            localStorage.setItem(LS_SHEET_ID, state.sheetId);
-            toast('Spreadsheet created. Share it with your family from Google Sheets.', 'success', 7000);
-            await enterBoard();
-        } catch (err) {
-            toast(err.message, 'error');
-        } finally {
-            $('create-sheet-btn').disabled = false;
-        }
-    });
-    $('use-sheet-btn').addEventListener('click', async () => {
-        const id = parseSheetId($('sheet-id-input').value.trim());
-        if (!id) return;
-        state.sheetId = id;
-        localStorage.setItem(LS_SHEET_ID, id);
-        await enterBoard();
-    });
 
     $('refresh-btn').addEventListener('click', () => refresh(true));
     $('add-task-btn').addEventListener('click', () => openTaskModal(null));
-    $('settings-btn').addEventListener('click', openSettings);
+    $('signout-btn').addEventListener('click', signOut);
 
     $('filter-room').addEventListener('change', (e) => { state.filterRoom = e.target.value; renderBoard(); });
     $('filter-contractor').addEventListener('change', (e) => { state.filterContractor = e.target.value; renderBoard(); });
@@ -731,18 +651,13 @@ function init() {
     $('archive-btn').addEventListener('click', onArchiveClick);
     $('modal-backdrop').addEventListener('click', (e) => { if (e.target === $('modal-backdrop')) closeTaskModal(); });
 
-    $('settings-save-btn').addEventListener('click', saveSettings);
-    $('settings-cancel-btn').addEventListener('click', closeSettings);
-    $('settings-backdrop').addEventListener('click', (e) => { if (e.target === $('settings-backdrop')) closeSettings(); });
-    $('signout-btn').addEventListener('click', signOut);
-
     document.addEventListener('keydown', (e) => {
-        if (e.key === 'Escape') { closeTaskModal(); closeSettings(); }
+        if (e.key === 'Escape') closeTaskModal();
     });
 
     // PRD R8: pick up direct spreadsheet edits when the tab regains focus.
     window.addEventListener('focus', () => {
-        if (state.token && state.sheetId && Date.now() - state.lastLoadAt > 15000
+        if (state.token && SHEET_ID && Date.now() - state.lastLoadAt > 15000
             && !$('board-view').classList.contains('hidden')) {
             refresh(false);
         }
