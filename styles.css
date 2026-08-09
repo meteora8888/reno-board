@@ -262,6 +262,35 @@ textarea { resize: vertical; }
 .task-card.done-card { opacity: .5; }
 .task-card.done-card .task-title { text-decoration: line-through; text-decoration-thickness: 1px; }
 
+/* ---------- Costs ledger ---------- */
+
+.costs { flex: 1; overflow-y: auto; padding: 16px; max-width: 860px; width: 100%; margin: 0 auto; }
+.costs-header {
+    display: flex; align-items: center; gap: 12px;
+    padding: 4px 2px 10px;
+    border-bottom: 2px solid var(--line);
+    margin-bottom: 10px;
+}
+.costs-header .wave-info { flex: 1; }
+.costs-list { display: flex; flex-direction: column; }
+.cost-row {
+    display: grid; grid-template-columns: 92px 1fr auto; gap: 10px; align-items: baseline;
+    padding: 9px 6px;
+    border-bottom: 1px solid var(--line);
+    cursor: pointer;
+}
+.cost-row:hover { background: var(--surface); }
+.cost-date { font-size: 12.5px; color: var(--ink-3); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.cost-desc { font-size: 14px; }
+.cost-desc .tag { margin-left: 6px; }
+.cost-note { display: block; font-size: 12px; color: var(--ink-3); }
+.cost-amount { font-size: 14px; font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+@media (max-width: 640px) {
+    .cost-row { grid-template-columns: 1fr auto; }
+    .cost-date { grid-column: 1 / -1; }
+}
+
 /* ---------- Modal ---------- */
 
 .modal-backdrop {

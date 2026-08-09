@@ -23,6 +23,7 @@ const SCOPES = 'https://www.googleapis.com/auth/spreadsheets';
 const TASK_HEADERS = ['ID', 'Title', 'Status', 'Room', 'Contractor', 'Cost Estimate',
     'Cost Actual', 'Due Date', 'Priority', 'Notes', 'Created', 'Updated', 'Epic', 'Depends On', 'Assignee',
     'Title EN', 'Notes EN'];
+const COST_HEADERS = ['ID', 'Date', 'Description', 'Amount', 'Epic', 'Contractor', 'Notes', 'Created', 'Updated'];
 const DEFAULT_STATUSES = ['Backlog', 'Planned', 'In Progress', 'Blocked', 'Done'];
 const DEFAULT_ROOMS = ['Kitchen', 'Living room', 'Bedroom', 'Bathroom', 'Hallway', 'Exterior', 'Whole house'];
 const PRIORITY_ORDER = { High: 0, Medium: 1, Low: 2 };
@@ -42,8 +43,10 @@ const state = {
     searchText: '',
     readyOnly: false,
     dueSoonOnly: false,
-    view: 'board',      // 'board' | 'timeline'
+    view: 'board',      // 'board' | 'timeline' | 'costs'
     lang: 'sk',         // 'sk' | 'en' — EN uses the Title EN / Notes EN columns
+    costs: [],          // standalone expenses without a task (Costs tab)
+    editingCostId: null,
     editingId: null,    // task being edited in the modal, null = new task
     lastLoadAt: 0,
 };
@@ -192,13 +195,37 @@ function newTaskId() {
     return `T-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 5)}`;
 }
 
+function newCostId() {
+    return `C-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 5)}`;
+}
+
+function parseCostRow(row) {
+    return {
+        id: fromCell(row[0]),
+        date: fromCell(row[1], true),
+        description: fromCell(row[2]),
+        amount: fromCostCell(row[3]),
+        epic: fromCell(row[4]),
+        contractor: fromCell(row[5]),
+        notes: fromCell(row[6]),
+        created: fromCell(row[7], true),
+        updated: fromCell(row[8], true),
+    };
+}
+
+function costToRow(c) {
+    return [c.id, c.date, c.description, c.amount === '' ? '' : c.amount,
+        c.epic || '', c.contractor || '', c.notes || '', c.created, c.updated];
+}
+
 const nowStamp = () => new Date().toISOString();
 
 async function loadAll() {
-    const ranges = 'ranges=Tasks!A2:Q&ranges=Config!A2:B';
+    const ranges = 'ranges=Tasks!A2:Q&ranges=Config!A2:B&ranges=Costs!A2:I';
     const data = await api(`/${SHEET_ID}/values:batchGet?${ranges}&valueRenderOption=UNFORMATTED_VALUE`);
-    const [taskValues, configValues] = data.valueRanges.map(v => v.values || []);
+    const [taskValues, configValues, costValues] = data.valueRanges.map(v => v.values || []);
     state.tasks = taskValues.filter(r => fromCell(r[0])).map(parseTaskRow);
+    state.costs = costValues.filter(r => fromCell(r[0])).map(parseCostRow);
     const statuses = configValues.map(r => fromCell(r[0])).filter(Boolean);
     const rooms = configValues.map(r => fromCell(r[1])).filter(Boolean);
     state.statuses = statuses.length ? statuses : DEFAULT_STATUSES;
@@ -274,6 +301,46 @@ async function deleteRowFromTab(title, rowNumber) {
     });
 }
 
+// --- Costs tab: same locate-by-ID / compare-Updated write safety as Tasks ---
+
+async function locateCost(id) {
+    const data = await api(`/${SHEET_ID}/values/Costs!A2:I?valueRenderOption=UNFORMATTED_VALUE`);
+    const rows = data.values || [];
+    const idx = rows.findIndex(r => fromCell(r[0]) === id);
+    if (idx === -1) return null;
+    return { rowNumber: idx + 2, remote: parseCostRow(rows[idx]) };
+}
+
+async function writeCost(original, changes) {
+    const loc = await locateCost(original.id);
+    if (!loc) throw new ConflictError('This cost entry was deleted in the spreadsheet.');
+    if (loc.remote.updated !== original.updated) {
+        throw new ConflictError('This cost entry changed in the spreadsheet since you loaded it.');
+    }
+    const merged = { ...loc.remote, ...changes, updated: nowStamp() };
+    await api(`/${SHEET_ID}/values/Costs!A${loc.rowNumber}:I${loc.rowNumber}?valueInputOption=RAW`, {
+        method: 'PUT',
+        body: { values: [costToRow(merged)] },
+    });
+    return merged;
+}
+
+async function appendCosts(costs) {
+    await api(`/${SHEET_ID}/values/Costs!A:I:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS`, {
+        method: 'POST',
+        body: { values: costs.map(costToRow) },
+    });
+}
+
+async function deleteCost(original) {
+    const loc = await locateCost(original.id);
+    if (!loc) throw new ConflictError('This cost entry was already deleted.');
+    if (loc.remote.updated !== original.updated) {
+        throw new ConflictError('This cost entry changed in the spreadsheet since you loaded it.');
+    }
+    await deleteRowFromTab('Costs', loc.rowNumber);
+}
+
 /** Undo of archiveTask: put the task back on the board, remove its Archive copy. */
 async function restoreArchived(task) {
     const restored = { ...task, updated: nowStamp() };
@@ -298,7 +365,7 @@ async function restoreArchived(task) {
 async function ensureTabs() {
     const meta = await api(`/${SHEET_ID}?fields=sheets.properties`);
     const existing = new Set(meta.sheets.map(s => s.properties.title));
-    const missing = ['Tasks', 'Config', 'Archive'].filter(t => !existing.has(t));
+    const missing = ['Tasks', 'Config', 'Archive', 'Costs'].filter(t => !existing.has(t));
 
     if (missing.length) {
         await api(`/${SHEET_ID}:batchUpdate`, {
@@ -308,6 +375,7 @@ async function ensureTabs() {
         const data = [];
         if (missing.includes('Tasks')) data.push({ range: 'Tasks!A1:Q1', values: [TASK_HEADERS] });
         if (missing.includes('Archive')) data.push({ range: 'Archive!A1:Q1', values: [TASK_HEADERS] });
+        if (missing.includes('Costs')) data.push({ range: 'Costs!A1:I1', values: [COST_HEADERS] });
         if (missing.includes('Config')) {
             const configRows = [['Statuses', 'Rooms']];
             const max = Math.max(DEFAULT_STATUSES.length, DEFAULT_ROOMS.length);
@@ -534,13 +602,83 @@ function fillSelect(select, options, emptyLabel, selected) {
     select.value = options.includes(selected) ? selected : '';
 }
 
+function visibleCosts() {
+    const needle = fold(state.searchText.trim());
+    return state.costs.filter(c =>
+        (!state.filterEpic || c.epic === state.filterEpic) &&
+        (!state.filterContractor || c.contractor === state.filterContractor) &&
+        (!needle || [c.description, c.notes, c.contractor, c.epic]
+            .some(f => f && fold(f).includes(needle))));
+}
+
 function renderBoard() {
     const tasks = visibleTasks();
     $('board').classList.toggle('hidden', state.view !== 'board');
     $('timeline').classList.toggle('hidden', state.view !== 'timeline');
+    $('costs').classList.toggle('hidden', state.view !== 'costs');
     if (state.view === 'timeline') renderTimeline(tasks);
+    else if (state.view === 'costs') renderCosts();
     else renderBoardColumns(tasks);
     renderCostSummary(tasks);
+}
+
+function renderCosts() {
+    const container = $('costs');
+    container.textContent = '';
+    const costs = visibleCosts().slice().sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+
+    const header = document.createElement('div');
+    header.className = 'costs-header';
+    const title = document.createElement('span');
+    title.className = 'wave-title';
+    title.textContent = 'Costs without a task';
+    const addBtn = document.createElement('button');
+    addBtn.className = 'btn btn-primary small';
+    addBtn.textContent = '+ Cost';
+    addBtn.addEventListener('click', () => openCostModal(null));
+    const total = document.createElement('span');
+    total.className = 'wave-info';
+    total.textContent = costs.length
+        ? `${costs.length} entries · ${eur.format(costs.reduce((s, c) => s + (c.amount || 0), 0))}`
+        : '';
+    header.append(title, total, addBtn);
+    container.appendChild(header);
+
+    if (!costs.length) {
+        const empty = document.createElement('div');
+        empty.className = 'empty-note';
+        empty.textContent = 'No cost entries yet — backfill paid bills that have no task here.';
+        container.appendChild(empty);
+        return;
+    }
+
+    const list = document.createElement('div');
+    list.className = 'costs-list';
+    for (const cost of costs) {
+        const row = document.createElement('div');
+        row.className = 'cost-row';
+        const date = document.createElement('span');
+        date.className = 'cost-date';
+        date.textContent = cost.date ? new Date(cost.date).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' }) : '—';
+        const desc = document.createElement('span');
+        desc.className = 'cost-desc';
+        desc.textContent = cost.description;
+        if (cost.epic) desc.appendChild(tag(cost.epic, 'epic'));
+        if (cost.contractor) desc.appendChild(tag(cost.contractor));
+        if (cost.notes) {
+            const n = document.createElement('span');
+            n.className = 'cost-note';
+            n.textContent = cost.notes;
+            desc.appendChild(n);
+        }
+        const amount = document.createElement('span');
+        amount.className = 'cost-amount';
+        amount.textContent = cost.amount === '' ? '—' : eur.format(cost.amount);
+        row.append(date, desc, amount);
+        row.addEventListener('click', () => openCostModal(cost.id));
+        list.appendChild(row);
+    }
+    container.appendChild(list);
 }
 
 function renderBoardColumns(tasks) {
@@ -643,6 +781,7 @@ function renderCostSummary(tasks) {
     };
     const est = tasks.reduce((s, t) => s + (t.costEst || 0), 0);
     const act = tasks.reduce((s, t) => s + (t.costAct || 0), 0);
+    const other = visibleCosts().reduce((s, c) => s + (c.amount || 0), 0);
     const saved = tasks.reduce((s, t) => s + (taskSaving(t) ?? 0), 0);
     const done = tasks.filter(t => t.status === terminalStatus()).length;
     if (tasks.length) push(`${done}/${tasks.length} done`);
@@ -650,15 +789,18 @@ function renderCostSummary(tasks) {
         push(`${eur.format(est)} est`);
         push(`${eur.format(act)} spent`);
     }
+    if (other) push(`${eur.format(other)} other`);
     if (saved) {
         push(saved > 0 ? `${eur.format(saved)} saved` : `${eur.format(-saved)} over`,
             saved > 0 ? 'saving-pos' : 'saving-neg');
-        // The stated goal: cut the budget in half.
-        const goal = est / 2;
-        if (goal > 0 && saved > 0) {
-            el.title = `Goal: halve the budget → save ${eur.format(goal)}. Progress: ${Math.round(saved / goal * 100)} %`;
-        }
     }
+    const tips = [];
+    if (act || other) tips.push(`Total spent incl. backfilled costs: ${eur.format(act + other)}`);
+    // The stated goal: cut the budget in half.
+    if (saved > 0 && est > 0) {
+        tips.push(`Goal: halve the budget → save ${eur.format(est / 2)}. Progress: ${Math.round(saved / (est / 2) * 100)} %`);
+    }
+    el.title = tips.join('\n');
 }
 
 function renderColumn(status, tasks) {
@@ -981,6 +1123,88 @@ async function onArchiveClick() {
 }
 
 // ---------------------------------------------------------------------------
+// Cost modal
+// ---------------------------------------------------------------------------
+
+function openCostModal(id) {
+    state.editingCostId = id || null;
+    const cost = id ? state.costs.find(c => c.id === id) : null;
+    $('cost-modal-title').textContent = cost ? 'Edit cost' : 'New cost';
+    fillDatalist('epic-list', [...state.tasks.map(t => t.epic), ...state.costs.map(c => c.epic)]);
+    fillDatalist('contractor-list', [...state.tasks.map(t => t.contractor), ...state.costs.map(c => c.contractor)]);
+    $('c-date').value = cost?.date ?? new Date().toISOString().slice(0, 10);
+    $('c-desc').value = cost?.description ?? '';
+    $('c-amount').value = cost?.amount ?? '';
+    $('c-epic').value = cost?.epic ?? '';
+    $('c-contractor').value = cost?.contractor ?? '';
+    $('c-notes').value = cost?.notes ?? '';
+    $('cost-delete-btn').classList.toggle('hidden', !cost);
+    $('cost-backdrop').classList.remove('hidden');
+    $('c-desc').focus();
+}
+
+function closeCostModal() {
+    $('cost-backdrop').classList.add('hidden');
+    state.editingCostId = null;
+}
+
+async function submitCostForm(e) {
+    e.preventDefault();
+    const fields = {
+        date: $('c-date').value,
+        description: $('c-desc').value.trim(),
+        amount: $('c-amount').value === '' ? '' : Number($('c-amount').value),
+        epic: $('c-epic').value.trim(),
+        contractor: $('c-contractor').value.trim(),
+        notes: $('c-notes').value.trim(),
+    };
+    if (!fields.description) return;
+    $('cost-save-btn').disabled = true;
+    try {
+        if (state.editingCostId) {
+            const cost = state.costs.find(c => c.id === state.editingCostId);
+            const merged = await writeCost(cost, fields);
+            Object.assign(cost, merged);
+        } else {
+            const now = nowStamp();
+            const cost = { id: newCostId(), ...fields, created: now, updated: now };
+            await appendCosts([cost]);
+            state.costs.push(cost);
+        }
+        closeCostModal();
+        renderBoard();
+    } catch (err) {
+        closeCostModal();
+        await handleWriteError(err);
+    } finally {
+        $('cost-save-btn').disabled = false;
+    }
+}
+
+async function onCostDelete() {
+    const cost = state.costs.find(c => c.id === state.editingCostId);
+    if (!cost) return;
+    $('cost-delete-btn').disabled = true;
+    try {
+        await deleteCost(cost);
+        state.costs = state.costs.filter(c => c.id !== cost.id);
+        closeCostModal();
+        renderBoard();
+        toastAction('Cost entry deleted.', 'Undo', async () => {
+            const restored = { ...cost, updated: nowStamp() };
+            await appendCosts([restored]);
+            state.costs.push(restored);
+            renderBoard();
+        });
+    } catch (err) {
+        closeCostModal();
+        await handleWriteError(err);
+    } finally {
+        $('cost-delete-btn').disabled = false;
+    }
+}
+
+// ---------------------------------------------------------------------------
 // TSV import
 // ---------------------------------------------------------------------------
 
@@ -993,6 +1217,89 @@ const HEADER_KEYS = {
     assignee: 'assignee', assignedto: 'assignee', owner: 'assignee',
     titleen: 'titleEN', englishtitle: 'titleEN', notesen: 'notesEN', englishnotes: 'notesEN',
 };
+
+const COST_HEADER_KEYS = {
+    id: 'id', date: 'date', paid: 'date', paiddate: 'date',
+    description: 'description', desc: 'description', item: 'description',
+    amount: 'amount', cost: 'amount', price: 'amount', sum: 'amount',
+    epic: 'epic', contractor: 'contractor', supplier: 'contractor', notes: 'notes',
+};
+
+/** 'tasks' if the header has a Title column, 'costs' if Description+Amount, else null. */
+function detectImportMode(text) {
+    const first = text.split(/\r?\n/).find(l => l.trim());
+    if (!first) return null;
+    const norm = first.split('\t').map(h => h.trim().toLowerCase().replace(/[^a-z]/g, ''));
+    if (norm.some(k => HEADER_KEYS[k] === 'title')) return 'tasks';
+    if (norm.some(k => COST_HEADER_KEYS[k] === 'description')
+        && norm.some(k => COST_HEADER_KEYS[k] === 'amount')) return 'costs';
+    return null;
+}
+
+/** Parse pasted TSV into cost entries (backfill mode). Same upsert semantics as tasks. */
+function parseCostsTSV(text) {
+    const warnings = [];
+    const lines = text.split(/\r?\n/).map(l => l.replace(/\r/g, '')).filter(l => l.trim() !== '');
+    const headers = lines[0].split('\t').map(h => COST_HEADER_KEYS[h.trim().toLowerCase().replace(/[^a-z]/g, '')] || null);
+    const existingById = new Map(state.costs.map(c => [c.id, c]));
+    const seenIds = new Set();
+    const now = nowStamp();
+    const costs = [];
+
+    for (let i = 1; i < lines.length; i++) {
+        const line = i + 1;
+        const cells = lines[i].split('\t');
+        const raw = {};
+        headers.forEach((key, c) => { if (key) raw[key] = (cells[c] ?? '').trim(); });
+
+        if (!raw.description) { warnings.push(`line ${line}: no description — skipped`); continue; }
+        if (raw.id && seenIds.has(raw.id)) {
+            warnings.push(`line ${line}: ID ${raw.id} appears twice in the paste — skipped`);
+            continue;
+        }
+        const existing = raw.id ? existingById.get(raw.id) : undefined;
+        const id = raw.id || `C-${Date.now().toString(36)}-${i}${Math.random().toString(36).slice(2, 4)}`;
+        seenIds.add(id);
+
+        const has = (key) => headers.includes(key);
+        const val = (key) => has(key) ? (raw[key] || '') : (existing?.[key] ?? '');
+
+        costs.push({
+            id,
+            date: has('date') ? parseImportDate(raw.date || '', warnings, line) : (existing?.date ?? ''),
+            description: raw.description,
+            amount: has('amount') ? parseImportCost(raw.amount || '', warnings, line) : (existing?.amount ?? ''),
+            epic: val('epic'),
+            contractor: val('contractor'),
+            notes: val('notes'),
+            created: existing?.created || now,
+            updated: now,
+            isUpdate: !!existing,
+        });
+    }
+    return { costs, warnings };
+}
+
+async function confirmCostImport(costs) {
+    const fresh = await api(`/${SHEET_ID}/values/Costs!A2:I?valueRenderOption=UNFORMATTED_VALUE`);
+    const rowById = new Map((fresh.values || []).map((r, i) => [fromCell(r[0]), i + 2]));
+    const toAppend = [];
+    const patches = [];
+    for (const cost of costs) {
+        delete cost.isUpdate;
+        const rowNumber = rowById.get(cost.id);
+        if (rowNumber) patches.push({ range: `Costs!A${rowNumber}:I${rowNumber}`, values: [costToRow(cost)] });
+        else toAppend.push(cost);
+    }
+    if (patches.length) {
+        await api(`/${SHEET_ID}/values:batchUpdate`, {
+            method: 'POST',
+            body: { valueInputOption: 'RAW', data: patches },
+        });
+    }
+    if (toAppend.length) await appendCosts(toAppend);
+    return { appended: toAppend.length, updated: patches.length };
+}
 
 function parseImportCost(raw, warnings, line) {
     const text = raw.trim();
@@ -1118,27 +1425,57 @@ function closeImportModal() {
 }
 
 function previewImport() {
-    const { tasks, warnings, error } = parseTSV($('import-text').value);
+    const text = $('import-text').value;
     const preview = $('import-preview');
+    const mode = detectImportMode(text);
+    if (!mode) {
+        preview.textContent = text.trim()
+            ? 'Header not recognized — need a Title column (tasks) or Description + Amount columns (costs).'
+            : '';
+        $('import-confirm-btn').disabled = true;
+        $('import-confirm-btn').textContent = 'Import';
+        return;
+    }
+    const parsed = mode === 'costs' ? parseCostsTSV(text) : parseTSV(text);
+    const items = mode === 'costs' ? parsed.costs : parsed.tasks;
+    const { warnings, error } = parsed;
     if (error) {
         preview.textContent = error;
         $('import-confirm-btn').disabled = true;
         return;
     }
-    const news = tasks.filter(t => !t.isUpdate).length;
-    const updates = tasks.length - news;
-    const parts = [];
+    const news = items.filter(t => !t.isUpdate).length;
+    const updates = items.length - news;
+    const parts = [mode === 'costs' ? 'Cost entries detected' : 'Tasks detected'];
     if (news) parts.push(`${news} new`);
     if (updates) parts.push(`${updates} update${updates === 1 ? '' : 's'} (existing IDs will be overwritten)`);
     parts.push(...warnings.slice(0, 5));
     if (warnings.length > 5) parts.push(`…and ${warnings.length - 5} more warnings`);
     preview.textContent = parts.join(' · ');
-    $('import-confirm-btn').disabled = !tasks.length;
-    $('import-confirm-btn').textContent = tasks.length ? `Import ${tasks.length}` : 'Import';
+    $('import-confirm-btn').disabled = !items.length;
+    $('import-confirm-btn').textContent = items.length ? `Import ${items.length}` : 'Import';
 }
 
 async function confirmImport() {
-    const { tasks } = parseTSV($('import-text').value);
+    const text = $('import-text').value;
+    const mode = detectImportMode(text);
+    if (mode === 'costs') {
+        const { costs } = parseCostsTSV(text);
+        if (!costs.length) return;
+        $('import-confirm-btn').disabled = true;
+        try {
+            const { appended, updated } = await confirmCostImport(costs);
+            closeImportModal();
+            await refresh(true);
+            toast(`Imported ${appended} new cost entries, updated ${updated}.`, 'success');
+        } catch (err) {
+            toast(err.message, 'error');
+        } finally {
+            $('import-confirm-btn').disabled = false;
+        }
+        return;
+    }
+    const { tasks } = parseTSV(text);
     if (!tasks.length) return;
     $('import-confirm-btn').disabled = true;
     try {
@@ -1180,17 +1517,20 @@ async function confirmImport() {
 // Export & preferences
 // ---------------------------------------------------------------------------
 
-/** Copy the currently visible tasks (filters/search applied) as TSV. */
+/** Copy the currently visible tasks — or cost entries, in the Costs view — as TSV. */
 async function exportTSV() {
-    const tasks = visibleTasks();
-    if (!tasks.length) { toast('Nothing to export with the current filters.', 'error'); return; }
-    const lines = [TASK_HEADERS.join('\t')];
-    for (const t of tasks) {
-        lines.push(taskToRow(t).map(cell => String(cell).replace(/\t/g, ' ').replace(/\r?\n/g, ' ')).join('\t'));
+    const costsMode = state.view === 'costs';
+    const items = costsMode ? visibleCosts() : visibleTasks();
+    if (!items.length) { toast('Nothing to export with the current filters.', 'error'); return; }
+    const headers = costsMode ? COST_HEADERS : TASK_HEADERS;
+    const toRow = costsMode ? costToRow : taskToRow;
+    const lines = [headers.join('\t')];
+    for (const item of items) {
+        lines.push(toRow(item).map(cell => String(cell).replace(/\t/g, ' ').replace(/\r?\n/g, ' ')).join('\t'));
     }
     try {
         await navigator.clipboard.writeText(lines.join('\n'));
-        toast(`Copied ${tasks.length} task${tasks.length === 1 ? '' : 's'} as TSV — paste into Gemini or a sheet.`, 'success');
+        toast(`Copied ${items.length} ${costsMode ? 'cost entries' : 'tasks'} as TSV — paste into Gemini or a sheet.`, 'success');
     } catch {
         toast('Clipboard access denied by the browser.', 'error');
     }
@@ -1239,11 +1579,13 @@ function init() {
         state.view = view;
         $('view-board-btn').classList.toggle('active', view === 'board');
         $('view-timeline-btn').classList.toggle('active', view === 'timeline');
+        $('view-costs-btn').classList.toggle('active', view === 'costs');
         savePrefs();
         renderBoard();
     };
     $('view-board-btn').addEventListener('click', () => setView('board'));
     $('view-timeline-btn').addEventListener('click', () => setView('timeline'));
+    $('view-costs-btn').addEventListener('click', () => setView('costs'));
     const setLang = (lang) => {
         state.lang = lang;
         $('lang-toggle').textContent = lang === 'en' ? 'SK' : 'EN';
@@ -1282,8 +1624,13 @@ function init() {
     $('archive-btn').addEventListener('click', onArchiveClick);
     $('modal-backdrop').addEventListener('click', (e) => { if (e.target === $('modal-backdrop')) closeTaskModal(); });
 
+    $('cost-form').addEventListener('submit', submitCostForm);
+    $('cost-cancel-btn').addEventListener('click', closeCostModal);
+    $('cost-delete-btn').addEventListener('click', onCostDelete);
+    $('cost-backdrop').addEventListener('click', (e) => { if (e.target === $('cost-backdrop')) closeCostModal(); });
+
     document.addEventListener('keydown', (e) => {
-        if (e.key === 'Escape') { closeTaskModal(); closeImportModal(); }
+        if (e.key === 'Escape') { closeTaskModal(); closeImportModal(); closeCostModal(); }
     });
 
     // PRD R8: pick up direct spreadsheet edits when the tab regains focus.
@@ -1300,6 +1647,7 @@ function init() {
     $('due-soon-toggle').classList.toggle('active', state.dueSoonOnly);
     $('view-board-btn').classList.toggle('active', state.view === 'board');
     $('view-timeline-btn').classList.toggle('active', state.view === 'timeline');
+    $('view-costs-btn').classList.toggle('active', state.view === 'costs');
     $('lang-toggle').textContent = state.lang === 'en' ? 'SK' : 'EN';
     $('lang-toggle').classList.toggle('active', state.lang === 'en');
 

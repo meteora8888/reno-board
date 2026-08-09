@@ -62,6 +62,7 @@ Reconstruction tasks live in a spreadsheet because it's easy to enter data and s
 17. **R17 — Savings tracking.** A task's saving is `Cost Estimate − Cost Actual`, shown on cards (green saved / red over) and totaled in the summary and per timeline wave. The summary's tooltip reports progress toward the goal of halving the budget (total saved vs. ½ of total estimates).
 18. **R18 — English mirror.** `Title EN` / `Notes EN` columns (filled externally, e.g. by an LLM) plus an SK/EN toggle that flips card titles and notes, falling back to Slovak where no translation exists. Both languages are searchable.
 19. **R19 — Workflow conveniences.** Export copies the visible (filtered) tasks as TSV to the clipboard; imports change only the pasted columns on updates; archive and drag moves offer a time-limited Undo; a "Due soon" toggle shows overdue + next-7-days tasks; view, language, filters and search persist across visits (localStorage).
+20. **R20 — Cost ledger.** A `Costs` tab holds expenses without a task (backfilled or already-paid bills): date, description, amount, optional epic/contractor, notes. A third view lists them date-sorted with a running total, add/edit/delete (with undo); entries respect the epic/contractor filters and search. The summary shows them as "other" and the tooltip reports total spend including them. TSV import auto-detects cost pastes (Description + Amount header) with the same upsert semantics; Export in the Costs view copies the ledger.
 
 ## UX Notes
 

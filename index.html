@@ -7,7 +7,7 @@
     <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' https://accounts.google.com; style-src 'self' 'unsafe-inline' https://accounts.google.com; connect-src 'self' https://sheets.googleapis.com https://accounts.google.com; frame-src https://accounts.google.com; img-src 'self' data:; font-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'; object-src 'none';">
     <!-- Bump ?v= on every deploy that touches app.js/styles.css — it pins the assets
          to this HTML so a cached JS can never mismatch a fresh page. -->
-    <link rel="stylesheet" href="styles.css?v=10">
+    <link rel="stylesheet" href="styles.css?v=11">
     <script src="https://accounts.google.com/gsi/client" async defer></script>
 </head>
 <body>
@@ -31,6 +31,7 @@
                 <div class="seg" role="tablist" aria-label="View">
                     <button id="view-board-btn" class="seg-btn active">Board</button>
                     <button id="view-timeline-btn" class="seg-btn">Timeline</button>
+                    <button id="view-costs-btn" class="seg-btn">Costs</button>
                 </div>
                 <button id="lang-toggle" class="btn btn-ghost small" title="Flip between Slovak and English (Title EN / Notes EN columns)">EN</button>
                 <a id="open-sheet-link" class="hint-link" target="_blank" rel="noopener">open sheet ↗</a>
@@ -60,6 +61,7 @@
 
         <section id="board" class="board" aria-label="Kanban board"></section>
         <section id="timeline" class="timeline hidden" aria-label="Dependency timeline"></section>
+        <section id="costs" class="costs hidden" aria-label="Cost ledger"></section>
     </main>
 
     <!-- ============ TASK MODAL ============ -->
@@ -148,11 +150,54 @@
         </div>
     </div>
 
+    <!-- ============ COST MODAL ============ -->
+    <div id="cost-backdrop" class="modal-backdrop hidden">
+        <div class="modal card" role="dialog" aria-modal="true" aria-labelledby="cost-modal-title">
+            <h2 id="cost-modal-title">Cost</h2>
+            <form id="cost-form">
+                <label class="field-label" for="c-desc">Description *</label>
+                <input id="c-desc" type="text" required autocomplete="off" placeholder="e.g. building permit fee">
+
+                <div class="form-row">
+                    <div>
+                        <label class="field-label" for="c-amount">Amount (€)</label>
+                        <input id="c-amount" type="number" step="0.01" min="0" inputmode="decimal">
+                    </div>
+                    <div>
+                        <label class="field-label" for="c-date">Date paid</label>
+                        <input id="c-date" type="date">
+                    </div>
+                </div>
+
+                <div class="form-row">
+                    <div>
+                        <label class="field-label" for="c-epic">Epic</label>
+                        <input id="c-epic" type="text" autocomplete="off" list="epic-list">
+                    </div>
+                    <div>
+                        <label class="field-label" for="c-contractor">Contractor</label>
+                        <input id="c-contractor" type="text" autocomplete="off" list="contractor-list">
+                    </div>
+                </div>
+
+                <label class="field-label" for="c-notes">Notes</label>
+                <textarea id="c-notes" rows="2"></textarea>
+
+                <div class="modal-actions">
+                    <button type="button" id="cost-delete-btn" class="btn btn-danger small">Delete</button>
+                    <span class="spacer"></span>
+                    <button type="button" id="cost-cancel-btn" class="btn btn-ghost">Cancel</button>
+                    <button type="submit" id="cost-save-btn" class="btn btn-primary">Save</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
     <!-- ============ IMPORT MODAL ============ -->
     <div id="import-backdrop" class="modal-backdrop hidden">
         <div class="modal card" role="dialog" aria-modal="true" aria-labelledby="import-title">
             <h2 id="import-title">Import tasks (TSV)</h2>
-            <p class="hint" style="margin-top:4px">Paste tab-separated rows. The first row must be a header containing at least <strong>Title</strong>; recognized columns (any order): ID, Title, Status, Room, Contractor, Cost Estimate, Cost Actual, Due Date, Priority, Notes, Epic, Depends On (comma-separated task IDs), Assignee, Title EN, Notes EN. On updates, only the pasted columns change. Missing IDs and timestamps are generated; rows whose ID already exists update that task in place.</p>
+            <p class="hint" style="margin-top:4px">Paste tab-separated rows. A header with <strong>Title</strong> imports tasks; a header with <strong>Description</strong> + <strong>Amount</strong> imports cost entries (columns: ID, Date, Description, Amount, Epic, Contractor, Notes). For tasks the header must contain at least <strong>Title</strong>; recognized columns (any order): ID, Title, Status, Room, Contractor, Cost Estimate, Cost Actual, Due Date, Priority, Notes, Epic, Depends On (comma-separated task IDs), Assignee, Title EN, Notes EN. On updates, only the pasted columns change. Missing IDs and timestamps are generated; rows whose ID already exists update that task in place.</p>
             <textarea id="import-text" rows="10" spellcheck="false" placeholder="Title&#9;Status&#9;Room&#9;Epic&#10;Tile the shower&#9;Planned&#9;Bathroom&#9;Bathroom renovation"></textarea>
             <p id="import-preview" class="hint" aria-live="polite"></p>
             <div class="modal-actions">
@@ -165,6 +210,6 @@
 
     <div id="toast-container" class="toast-container" aria-live="polite"></div>
 
-    <script src="app.js?v=10"></script>
+    <script src="app.js?v=11"></script>
 </body>
 </html>

@@ -16,6 +16,10 @@ PRD: [docs/prd/2026-08-08-reconstruction-kanban-board.md](docs/prd/2026-08-08-re
 - `Title EN`/`Notes EN` power the SK/EN toggle (fill via LLM; Slovak is the fallback).
 - Export copies visible tasks as TSV; import updates touch only pasted columns;
   archive/moves have Undo; UI state persists in localStorage.
+- `Costs` tab (`A..I`: ID, Date, Description, Amount, Epic, Contractor, Notes,
+  Created, Updated) is a ledger for expenses without a task — backfilled/already
+  paid bills. Third view with running total; counted as "other" in the summary.
+  TSV import auto-detects cost pastes via a Description + Amount header.
 - `Assignee` is the household member who owns/follows up the task (vs. `Contractor`,
   the hired company). Shown as an @ tag on cards, with its own filter.
 - `Epic` is a free-text label grouping related tasks (e.g. "Bathroom renovation");
