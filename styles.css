@@ -134,6 +134,9 @@ textarea { resize: vertical; }
 .topbar-filters select { width: auto; max-width: 170px; padding: 6px 8px; font-size: 13px; }
 .topbar-filters #search-input { width: 160px; padding: 6px 10px; font-size: 13px; }
 #ready-toggle.active { background: var(--ok); color: #fff; border-color: var(--ok); }
+#due-soon-toggle.active { background: var(--warn); color: #fff; border-color: var(--warn); }
+#lang-toggle.active { background: var(--epic); color: #fff; border-color: var(--epic); }
+.hint-inline { font-weight: 400; color: var(--ink-3); }
 
 .deps-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }
 .deps-chips:empty { display: none; }
@@ -225,6 +228,8 @@ textarea { resize: vertical; }
 
 .task-cost { font-variant-numeric: tabular-nums; color: var(--ink-3); font-size: 12px; margin-top: 4px; }
 .task-cost .actual { color: var(--ink-2); }
+.saving-pos { color: var(--ok); font-weight: 600; }
+.saving-neg { color: var(--danger); font-weight: 600; }
 
 .empty-note { color: var(--ink-3); font-size: 12.5px; text-align: center; padding: 10px 0; }
 
@@ -293,6 +298,11 @@ textarea { resize: vertical; }
 }
 .toast.error { background: var(--danger); color: #fff; }
 .toast.success { background: var(--ok); color: #fff; }
+.toast-action {
+    background: none; border: 1px solid currentColor; border-radius: 5px;
+    color: inherit; font: inherit; font-weight: 700; font-size: 12.5px;
+    padding: 2px 10px; margin-left: 8px; cursor: pointer;
+}
 @keyframes toast-in { from { opacity: 0; transform: translateY(6px); } }
 
 /* ---------- Mobile ---------- */

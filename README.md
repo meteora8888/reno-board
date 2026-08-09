@@ -9,8 +9,13 @@ PRD: [docs/prd/2026-08-08-reconstruction-kanban-board.md](docs/prd/2026-08-08-re
 
 ## How it works
 
-- `Tasks` tab is the source of truth. Columns `A..O`:
-  `ID, Title, Status, Room, Contractor, Cost Estimate, Cost Actual, Due Date, Priority, Notes, Created, Updated, Epic, Depends On, Assignee`
+- `Tasks` tab is the source of truth. Columns `A..Q`:
+  `ID, Title, Status, Room, Contractor, Cost Estimate, Cost Actual, Due Date, Priority, Notes, Created, Updated, Epic, Depends On, Assignee, Title EN, Notes EN`
+- Savings: `Cost Estimate − Cost Actual` per task, shown on cards and totaled in the
+  summary (tooltip tracks progress toward halving the budget).
+- `Title EN`/`Notes EN` power the SK/EN toggle (fill via LLM; Slovak is the fallback).
+- Export copies visible tasks as TSV; import updates touch only pasted columns;
+  archive/moves have Undo; UI state persists in localStorage.
 - `Assignee` is the household member who owns/follows up the task (vs. `Contractor`,
   the hired company). Shown as an @ tag on cards, with its own filter.
 - `Epic` is a free-text label grouping related tasks (e.g. "Bathroom renovation");

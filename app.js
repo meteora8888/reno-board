@@ -21,7 +21,8 @@ const SHEETS_API = 'https://sheets.googleapis.com/v4/spreadsheets';
 const SCOPES = 'https://www.googleapis.com/auth/spreadsheets';
 
 const TASK_HEADERS = ['ID', 'Title', 'Status', 'Room', 'Contractor', 'Cost Estimate',
-    'Cost Actual', 'Due Date', 'Priority', 'Notes', 'Created', 'Updated', 'Epic', 'Depends On', 'Assignee'];
+    'Cost Actual', 'Due Date', 'Priority', 'Notes', 'Created', 'Updated', 'Epic', 'Depends On', 'Assignee',
+    'Title EN', 'Notes EN'];
 const DEFAULT_STATUSES = ['Backlog', 'Planned', 'In Progress', 'Blocked', 'Done'];
 const DEFAULT_ROOMS = ['Kitchen', 'Living room', 'Bedroom', 'Bathroom', 'Hallway', 'Exterior', 'Whole house'];
 const PRIORITY_ORDER = { High: 0, Medium: 1, Low: 2 };
@@ -40,7 +41,9 @@ const state = {
     filterAssignee: '',
     searchText: '',
     readyOnly: false,
+    dueSoonOnly: false,
     view: 'board',      // 'board' | 'timeline'
+    lang: 'sk',         // 'sk' | 'en' — EN uses the Title EN / Notes EN columns
     editingId: null,    // task being edited in the modal, null = new task
     lastLoadAt: 0,
 };
@@ -164,6 +167,8 @@ function parseTaskRow(row) {
         epic: fromCell(row[12]),
         deps: fromCell(row[13]).split(/[,;]/).map(s => s.trim()).filter(Boolean),
         assignee: fromCell(row[14]),
+        titleEN: fromCell(row[15]),
+        notesEN: fromCell(row[16]),
     };
 }
 
@@ -171,7 +176,16 @@ function taskToRow(t) {
     return [t.id, t.title, t.status, t.room, t.contractor,
         t.costEst === '' ? '' : t.costEst, t.costAct === '' ? '' : t.costAct,
         t.due, t.priority, t.notes, t.created, t.updated, t.epic,
-        (t.deps || []).join(', '), t.assignee || ''];
+        (t.deps || []).join(', '), t.assignee || '', t.titleEN || '', t.notesEN || ''];
+}
+
+// Language toggle: EN shows the Gemini-translated columns, falling back to Slovak.
+function displayTitle(t) {
+    return state.lang === 'en' && t.titleEN ? t.titleEN : t.title;
+}
+
+function displayNotes(t) {
+    return state.lang === 'en' && t.notesEN ? t.notesEN : t.notes;
 }
 
 function newTaskId() {
@@ -181,7 +195,7 @@ function newTaskId() {
 const nowStamp = () => new Date().toISOString();
 
 async function loadAll() {
-    const ranges = 'ranges=Tasks!A2:O&ranges=Config!A2:B';
+    const ranges = 'ranges=Tasks!A2:Q&ranges=Config!A2:B';
     const data = await api(`/${SHEET_ID}/values:batchGet?${ranges}&valueRenderOption=UNFORMATTED_VALUE`);
     const [taskValues, configValues] = data.valueRanges.map(v => v.values || []);
     state.tasks = taskValues.filter(r => fromCell(r[0])).map(parseTaskRow);
@@ -194,7 +208,7 @@ async function loadAll() {
 
 /** Re-read the Tasks tab and find a task's current row by ID (PRD R7). */
 async function locateTask(id) {
-    const data = await api(`/${SHEET_ID}/values/Tasks!A2:O?valueRenderOption=UNFORMATTED_VALUE`);
+    const data = await api(`/${SHEET_ID}/values/Tasks!A2:Q?valueRenderOption=UNFORMATTED_VALUE`);
     const rows = data.values || [];
     const idx = rows.findIndex(r => fromCell(r[0]) === id);
     if (idx === -1) return null;
@@ -210,7 +224,7 @@ async function writeTask(original, changes) {
         throw new ConflictError('This task changed in the spreadsheet since you loaded it.');
     }
     const merged = { ...loc.remote, ...changes, updated: nowStamp() };
-    await api(`/${SHEET_ID}/values/Tasks!A${loc.rowNumber}:O${loc.rowNumber}?valueInputOption=RAW`, {
+    await api(`/${SHEET_ID}/values/Tasks!A${loc.rowNumber}:Q${loc.rowNumber}?valueInputOption=RAW`, {
         method: 'PUT',
         body: { values: [taskToRow(merged)] },
     });
@@ -218,7 +232,7 @@ async function writeTask(original, changes) {
 }
 
 async function appendTask(task) {
-    await api(`/${SHEET_ID}/values/Tasks!A:O:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS`, {
+    await api(`/${SHEET_ID}/values/Tasks!A:Q:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS`, {
         method: 'POST',
         body: { values: [taskToRow(task)] },
     });
@@ -231,29 +245,49 @@ async function archiveTask(original) {
         throw new ConflictError('This task changed in the spreadsheet since you loaded it.');
     }
     const archived = { ...loc.remote, updated: nowStamp() };
-    await api(`/${SHEET_ID}/values/Archive!A:O:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS`, {
+    await api(`/${SHEET_ID}/values/Archive!A:Q:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS`, {
         method: 'POST',
         body: { values: [taskToRow(archived)] },
     });
-    // Row numbers are 1-based, deleteDimension indices 0-based.
+    await deleteRowFromTab('Tasks', loc.rowNumber);
+}
+
+// Row numbers are 1-based, deleteDimension indices 0-based.
+async function deleteRowFromTab(title, rowNumber) {
     const meta = await api(`/${SHEET_ID}?fields=sheets.properties`);
-    const tasksSheet = meta.sheets.find(s => s.properties.title === 'Tasks');
-    if (!tasksSheet) throw new Error('Tasks tab not found in the spreadsheet.');
+    const sheet = meta.sheets.find(s => s.properties.title === title);
+    if (!sheet) throw new Error(`${title} tab not found in the spreadsheet.`);
     await api(`/${SHEET_ID}:batchUpdate`, {
         method: 'POST',
         body: {
             requests: [{
                 deleteDimension: {
                     range: {
-                        sheetId: tasksSheet.properties.sheetId,
+                        sheetId: sheet.properties.sheetId,
                         dimension: 'ROWS',
-                        startIndex: loc.rowNumber - 1,
-                        endIndex: loc.rowNumber,
+                        startIndex: rowNumber - 1,
+                        endIndex: rowNumber,
                     },
                 },
             }],
         },
     });
+}
+
+/** Undo of archiveTask: put the task back on the board, remove its Archive copy. */
+async function restoreArchived(task) {
+    const restored = { ...task, updated: nowStamp() };
+    await api(`/${SHEET_ID}/values/Tasks!A:Q:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS`, {
+        method: 'POST',
+        body: { values: [taskToRow(restored)] },
+    });
+    const data = await api(`/${SHEET_ID}/values/Archive!A2:Q?valueRenderOption=UNFORMATTED_VALUE`);
+    let rowNumber = -1;
+    (data.values || []).forEach((r, i) => { if (fromCell(r[0]) === task.id) rowNumber = i + 2; });
+    if (rowNumber > 0) await deleteRowFromTab('Archive', rowNumber);
+    state.tasks.push(restored);
+    renderFilters();
+    renderBoard();
 }
 
 /**
@@ -272,8 +306,8 @@ async function ensureTabs() {
             body: { requests: missing.map(title => ({ addSheet: { properties: { title } } })) },
         });
         const data = [];
-        if (missing.includes('Tasks')) data.push({ range: 'Tasks!A1:O1', values: [TASK_HEADERS] });
-        if (missing.includes('Archive')) data.push({ range: 'Archive!A1:O1', values: [TASK_HEADERS] });
+        if (missing.includes('Tasks')) data.push({ range: 'Tasks!A1:Q1', values: [TASK_HEADERS] });
+        if (missing.includes('Archive')) data.push({ range: 'Archive!A1:Q1', values: [TASK_HEADERS] });
         if (missing.includes('Config')) {
             const configRows = [['Statuses', 'Rooms']];
             const max = Math.max(DEFAULT_STATUSES.length, DEFAULT_ROOMS.length);
@@ -288,13 +322,15 @@ async function ensureTabs() {
 
     // Schema upgrade: tabs provisioned before the Epic (M) / Depends On (N) /
     // Assignee (O) columns existed lack those headers.
-    const head = await api(`/${SHEET_ID}/values:batchGet?ranges=Tasks!M1:O1&ranges=Archive!M1:O1`);
+    const head = await api(`/${SHEET_ID}/values:batchGet?ranges=Tasks!M1:Q1&ranges=Archive!M1:Q1`);
     const patches = [];
     for (const [tab, range] of [['Tasks', 0], ['Archive', 1]]) {
         const cells = head.valueRanges[range].values?.[0] || [];
         if (!cells[0]) patches.push({ range: `${tab}!M1`, values: [['Epic']] });
         if (!cells[1]) patches.push({ range: `${tab}!N1`, values: [['Depends On']] });
         if (!cells[2]) patches.push({ range: `${tab}!O1`, values: [['Assignee']] });
+        if (!cells[3]) patches.push({ range: `${tab}!P1`, values: [['Title EN']] });
+        if (!cells[4]) patches.push({ range: `${tab}!Q1`, values: [['Notes EN']] });
     }
     if (patches.length) {
         await api(`/${SHEET_ID}/values:batchUpdate`, {
@@ -319,6 +355,25 @@ function toast(message, kind = 'info', ms = 4200) {
     const el = document.createElement('div');
     el.className = `toast ${kind}`;
     el.textContent = message;
+    $('toast-container').appendChild(el);
+    setTimeout(() => el.remove(), ms);
+}
+
+/** Toast with an action button (e.g. Undo). The action can only fire once. */
+function toastAction(message, label, action, ms = 8000) {
+    const el = document.createElement('div');
+    el.className = 'toast';
+    const text = document.createElement('span');
+    text.textContent = message + ' ';
+    const btn = document.createElement('button');
+    btn.className = 'toast-action';
+    btn.textContent = label;
+    btn.addEventListener('click', async () => {
+        btn.disabled = true;
+        el.remove();
+        try { await action(); } catch (err) { toast(err.message, 'error'); }
+    });
+    el.append(text, btn);
     $('toast-container').appendChild(el);
     setTimeout(() => el.remove(), ms);
 }
@@ -350,6 +405,12 @@ async function refresh(showErrors) {
 }
 
 const eur = new Intl.NumberFormat('sk-SK', { style: 'currency', currency: 'EUR', maximumFractionDigits: 0 });
+
+/** Saving on a task: estimate minus actual, only meaningful once both are known. */
+function taskSaving(t) {
+    if (t.costEst === '' || t.costAct === '' || t.costEst === undefined || t.costAct === undefined) return null;
+    return t.costEst - t.costAct;
+}
 
 function formatDue(iso) {
     const d = new Date(iso);
@@ -403,8 +464,19 @@ function fold(text) {
 }
 
 function matchesSearch(task, needle) {
-    return [task.title, task.notes, task.contractor, task.epic, task.room, task.assignee]
+    return [task.title, task.notes, task.contractor, task.epic, task.room, task.assignee,
+        task.titleEN, task.notesEN]
         .some(field => field && fold(field).includes(needle));
+}
+
+function isDueSoon(task) {
+    if (!task.due || task.status === terminalStatus()) return false;
+    const d = new Date(task.due);
+    if (Number.isNaN(d.getTime())) return false;
+    const limit = new Date();
+    limit.setHours(0, 0, 0, 0);
+    limit.setDate(limit.getDate() + 7);
+    return d <= limit; // overdue included
 }
 
 function visibleTasks() {
@@ -416,7 +488,8 @@ function visibleTasks() {
         (!state.filterEpic || t.epic === state.filterEpic) &&
         (!state.filterAssignee || t.assignee === state.filterAssignee) &&
         (!needle || matchesSearch(t, needle)) &&
-        (!state.readyOnly || (t.status !== done && unmetDeps(t).length === 0)));
+        (!state.readyOnly || (t.status !== done && unmetDeps(t).length === 0)) &&
+        (!state.dueSoonOnly || isDueSoon(t)));
 }
 
 function taskSort(a, b) {
@@ -431,7 +504,7 @@ function taskSort(a, b) {
         if (!b.due) return -1;
         return a.due < b.due ? -1 : 1;
     }
-    return a.title.localeCompare(b.title);
+    return displayTitle(a).localeCompare(displayTitle(b));
 }
 
 function renderFilters() {
@@ -538,7 +611,10 @@ function renderTimeline(tasks) {
         info.className = 'wave-info';
         const doneCount = inWave.filter(t => t.status === done).length;
         const est = inWave.reduce((s, t) => s + (t.costEst || 0), 0);
-        info.textContent = `${doneCount}/${inWave.length} done` + (est ? ` · ${eur.format(est)} est` : '');
+        const saved = inWave.reduce((s, t) => s + (taskSaving(t) ?? 0), 0);
+        info.textContent = `${doneCount}/${inWave.length} done`
+            + (est ? ` · ${eur.format(est)} est` : '')
+            + (saved > 0 ? ` · ${eur.format(saved)} saved` : saved < 0 ? ` · ${eur.format(-saved)} over` : '');
         header.append(name, info);
         wave.appendChild(header);
 
@@ -556,13 +632,33 @@ function renderTimeline(tasks) {
 }
 
 function renderCostSummary(tasks) {
+    const el = $('cost-summary');
+    el.textContent = '';
+    const push = (text, cls) => {
+        if (el.childNodes.length) el.appendChild(document.createTextNode(' · '));
+        const span = document.createElement('span');
+        if (cls) span.className = cls;
+        span.textContent = text;
+        el.appendChild(span);
+    };
     const est = tasks.reduce((s, t) => s + (t.costEst || 0), 0);
     const act = tasks.reduce((s, t) => s + (t.costAct || 0), 0);
+    const saved = tasks.reduce((s, t) => s + (taskSaving(t) ?? 0), 0);
     const done = tasks.filter(t => t.status === terminalStatus()).length;
-    const parts = [];
-    if (tasks.length) parts.push(`${done}/${tasks.length} done`);
-    if (est || act) parts.push(`${eur.format(est)} est · ${eur.format(act)} spent`);
-    $('cost-summary').textContent = parts.join(' · ');
+    if (tasks.length) push(`${done}/${tasks.length} done`);
+    if (est || act) {
+        push(`${eur.format(est)} est`);
+        push(`${eur.format(act)} spent`);
+    }
+    if (saved) {
+        push(saved > 0 ? `${eur.format(saved)} saved` : `${eur.format(-saved)} over`,
+            saved > 0 ? 'saving-pos' : 'saving-neg');
+        // The stated goal: cut the budget in half.
+        const goal = est / 2;
+        if (goal > 0 && saved > 0) {
+            el.title = `Goal: halve the budget → save ${eur.format(goal)}. Progress: ${Math.round(saved / goal * 100)} %`;
+        }
+    }
 }
 
 function renderColumn(status, tasks) {
@@ -611,7 +707,7 @@ function renderCard(task) {
 
     const title = document.createElement('div');
     title.className = 'task-title';
-    title.textContent = task.title;
+    title.textContent = displayTitle(task);
     card.appendChild(title);
 
     const meta = document.createElement('div');
@@ -625,7 +721,7 @@ function renderCard(task) {
     const blockers = unmetDeps(task);
     if (blockers.length) {
         const t = tag(`⛓ ${blockers.length} waiting`, 'waiting');
-        t.title = 'Waiting on: ' + blockers.map(b => b.title).join(' · ');
+        t.title = 'Waiting on: ' + blockers.map(displayTitle).join(' · ');
         meta.appendChild(t);
         card.classList.add('blocked-card');
     } else if ((task.deps || []).length && task.status !== terminalStatus()) {
@@ -633,20 +729,30 @@ function renderCard(task) {
     }
     if (meta.childElementCount) card.appendChild(meta);
 
-    if (task.notes) {
+    if (displayNotes(task)) {
         const notes = document.createElement('div');
         notes.className = 'task-notes';
-        notes.textContent = task.notes;
+        notes.textContent = displayNotes(task);
         card.appendChild(notes);
     }
 
     if (task.costEst !== '' || task.costAct !== '') {
         const cost = document.createElement('div');
         cost.className = 'task-cost';
-        const parts = [];
-        if (task.costEst !== '') parts.push(`${eur.format(task.costEst)} est`);
-        if (task.costAct !== '') parts.push(`${eur.format(task.costAct)} spent`);
-        cost.innerHTML = parts.map((p, i) => i === 1 ? `<span class="actual">${p}</span>` : p).join(' · ');
+        const push = (text, cls) => {
+            if (cost.childNodes.length) cost.appendChild(document.createTextNode(' · '));
+            const span = document.createElement('span');
+            if (cls) span.className = cls;
+            span.textContent = text;
+            cost.appendChild(span);
+        };
+        if (task.costEst !== '') push(`${eur.format(task.costEst)} est`);
+        if (task.costAct !== '') push(`${eur.format(task.costAct)} spent`, 'actual');
+        const saving = taskSaving(task);
+        if (saving !== null && saving !== 0) {
+            push(saving > 0 ? `${eur.format(saving)} saved` : `${eur.format(-saving)} over`,
+                saving > 0 ? 'saving-pos' : 'saving-neg');
+        }
         card.appendChild(cost);
     }
 
@@ -674,6 +780,7 @@ function tag(text, extra = '') {
 async function moveTask(id, newStatus) {
     const task = state.tasks.find(t => t.id === id);
     if (!task || task.status === newStatus) return;
+    const prevStatus = task.status;
 
     // Optimistically show the card in its new column, greyed out while saving.
     const card = document.querySelector(`.task-card[data-id="${CSS.escape(id)}"]`);
@@ -687,6 +794,15 @@ async function moveTask(id, newStatus) {
         const merged = await writeTask(task, { status: newStatus });
         Object.assign(task, merged);
         renderBoard();
+        toastAction(`Moved to ${newStatus}.`, 'Undo', async () => {
+            try {
+                const reverted = await writeTask(task, { status: prevStatus });
+                Object.assign(task, reverted);
+                renderBoard();
+            } catch (err) {
+                await handleWriteError(err);
+            }
+        });
     } catch (err) {
         await handleWriteError(err); // re-renders from fresh data → card returns to its true column
     }
@@ -715,7 +831,8 @@ function renderDepsEditor() {
         const chip = document.createElement('span');
         chip.className = 'dep-chip';
         const label = document.createElement('span');
-        label.textContent = taskById(depId)?.title || depId;
+        const depTask = taskById(depId);
+        label.textContent = depTask ? displayTitle(depTask) : depId;
         const remove = document.createElement('button');
         remove.type = 'button';
         remove.className = 'dep-remove';
@@ -736,11 +853,11 @@ function renderDepsEditor() {
     select.appendChild(placeholder);
     const candidates = state.tasks
         .filter(t => t.id !== state.editingId && !modalDeps.includes(t.id))
-        .sort((a, b) => a.title.localeCompare(b.title));
+        .sort((a, b) => displayTitle(a).localeCompare(displayTitle(b)));
     for (const t of candidates) {
         const opt = document.createElement('option');
         opt.value = t.id;
-        opt.textContent = t.epic ? `${t.title} (${t.epic})` : t.title;
+        opt.textContent = t.epic ? `${displayTitle(t)} (${t.epic})` : displayTitle(t);
         select.appendChild(opt);
     }
 }
@@ -763,6 +880,8 @@ function openTaskModal(id) {
     fillDatalist('assignee-list', state.tasks.map(t => t.assignee));
 
     $('f-title').value = task?.title ?? '';
+    $('f-title-en').value = task?.titleEN ?? '';
+    $('f-notes-en').value = task?.notesEN ?? '';
     $('f-epic').value = task?.epic ?? '';
     $('f-assignee').value = task?.assignee ?? '';
     $('f-contractor').value = task?.contractor ?? '';
@@ -806,6 +925,8 @@ function readForm() {
         notes: $('f-notes').value.trim(),
         deps: [...modalDeps],
         assignee: $('f-assignee').value.trim(),
+        titleEN: $('f-title-en').value.trim(),
+        notesEN: $('f-notes-en').value.trim(),
     };
 }
 
@@ -850,7 +971,7 @@ async function onArchiveClick() {
         closeTaskModal();
         renderFilters();
         renderBoard();
-        toast('Task archived.', 'success');
+        toastAction('Task archived.', 'Undo', () => restoreArchived(task));
     } catch (err) {
         closeTaskModal();
         await handleWriteError(err);
@@ -870,6 +991,7 @@ const HEADER_KEYS = {
     created: 'created', updated: 'updated',
     dependson: 'deps', depends: 'deps', blockedby: 'deps', predecessors: 'deps',
     assignee: 'assignee', assignedto: 'assignee', owner: 'assignee',
+    titleen: 'titleEN', englishtitle: 'titleEN', notesen: 'notesEN', englishnotes: 'notesEN',
 };
 
 function parseImportCost(raw, warnings, line) {
@@ -929,36 +1051,46 @@ function parseTSV(text) {
         const id = raw.id || `T-${Date.now().toString(36)}-${i}${Math.random().toString(36).slice(2, 4)}`;
         seenIds.add(id);
 
-        let status = raw.status || state.statuses[0];
+        // A column absent from the paste never changes an existing task's field —
+        // only columns present in the header can set (or clear) values.
+        const has = (key) => headers.includes(key);
+        const val = (key) => has(key) ? (raw[key] || '') : (existing?.[key] ?? '');
+
+        let status = has('status') ? (raw.status || state.statuses[0]) : (existing?.status || state.statuses[0]);
         const canonical = state.statuses.find(s => s.toLowerCase() === status.toLowerCase());
         if (canonical) status = canonical;
         else warnings.push(`line ${line}: status "${status}" is not in Config — card will land in an extra column`);
 
-        let priority = raw.priority || '';
+        let priority = val('priority');
         const prioCanonical = ['High', 'Medium', 'Low'].find(p => p.toLowerCase() === priority.toLowerCase());
         if (priority && !prioCanonical) warnings.push(`line ${line}: priority "${priority}" is not High/Medium/Low`);
         if (prioCanonical) priority = prioCanonical;
 
-        if (raw.room && !state.rooms.includes(raw.room)) {
-            warnings.push(`line ${line}: room "${raw.room}" is not in Config`);
+        const room = val('room');
+        if (room && !state.rooms.includes(room)) {
+            warnings.push(`line ${line}: room "${room}" is not in Config`);
         }
 
         tasks.push({
             id,
             title: raw.title,
             status,
-            room: raw.room || '',
-            contractor: raw.contractor || '',
-            costEst: parseImportCost(raw.costEst || '', warnings, line),
-            costAct: parseImportCost(raw.costAct || '', warnings, line),
-            due: parseImportDate(raw.due || '', warnings, line),
+            room,
+            contractor: val('contractor'),
+            costEst: has('costEst') ? parseImportCost(raw.costEst || '', warnings, line) : (existing?.costEst ?? ''),
+            costAct: has('costAct') ? parseImportCost(raw.costAct || '', warnings, line) : (existing?.costAct ?? ''),
+            due: has('due') ? parseImportDate(raw.due || '', warnings, line) : (existing?.due ?? ''),
             priority,
-            notes: raw.notes || '',
+            notes: val('notes'),
             created: raw.created || existing?.created || now,
             updated: now,
-            epic: raw.epic || '',
-            deps: (raw.deps || '').split(/[,;]/).map(s => s.trim()).filter(Boolean),
-            assignee: raw.assignee || '',
+            epic: val('epic'),
+            deps: has('deps')
+                ? (raw.deps || '').split(/[,;]/).map(s => s.trim()).filter(Boolean)
+                : (existing?.deps ?? []),
+            assignee: val('assignee'),
+            titleEN: val('titleEN'),
+            notesEN: val('notesEN'),
             isUpdate: !!existing,
         });
     }
@@ -1011,7 +1143,7 @@ async function confirmImport() {
     $('import-confirm-btn').disabled = true;
     try {
         // Fresh row map so updates land on the row that holds each ID right now (PRD R7).
-        const fresh = await api(`/${SHEET_ID}/values/Tasks!A2:O?valueRenderOption=UNFORMATTED_VALUE`);
+        const fresh = await api(`/${SHEET_ID}/values/Tasks!A2:Q?valueRenderOption=UNFORMATTED_VALUE`);
         const rowById = new Map((fresh.values || []).map((r, i) => [fromCell(r[0]), i + 2]));
 
         const toAppend = [];
@@ -1019,7 +1151,7 @@ async function confirmImport() {
         for (const task of tasks) {
             delete task.isUpdate;
             const rowNumber = rowById.get(task.id);
-            if (rowNumber) patches.push({ range: `Tasks!A${rowNumber}:O${rowNumber}`, values: [taskToRow(task)] });
+            if (rowNumber) patches.push({ range: `Tasks!A${rowNumber}:Q${rowNumber}`, values: [taskToRow(task)] });
             else toAppend.push(task);
         }
         if (patches.length) {
@@ -1029,7 +1161,7 @@ async function confirmImport() {
             });
         }
         if (toAppend.length) {
-            await api(`/${SHEET_ID}/values/Tasks!A:O:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS`, {
+            await api(`/${SHEET_ID}/values/Tasks!A:Q:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS`, {
                 method: 'POST',
                 body: { values: toAppend.map(taskToRow) },
             });
@@ -1045,16 +1177,56 @@ async function confirmImport() {
 }
 
 // ---------------------------------------------------------------------------
+// Export & preferences
+// ---------------------------------------------------------------------------
+
+/** Copy the currently visible tasks (filters/search applied) as TSV. */
+async function exportTSV() {
+    const tasks = visibleTasks();
+    if (!tasks.length) { toast('Nothing to export with the current filters.', 'error'); return; }
+    const lines = [TASK_HEADERS.join('\t')];
+    for (const t of tasks) {
+        lines.push(taskToRow(t).map(cell => String(cell).replace(/\t/g, ' ').replace(/\r?\n/g, ' ')).join('\t'));
+    }
+    try {
+        await navigator.clipboard.writeText(lines.join('\n'));
+        toast(`Copied ${tasks.length} task${tasks.length === 1 ? '' : 's'} as TSV — paste into Gemini or a sheet.`, 'success');
+    } catch {
+        toast('Clipboard access denied by the browser.', 'error');
+    }
+}
+
+const LS_PREFS = 'rb_prefs';
+const PREF_KEYS = ['view', 'lang', 'filterRoom', 'filterContractor', 'filterEpic',
+    'filterAssignee', 'searchText', 'readyOnly', 'dueSoonOnly'];
+
+function savePrefs() {
+    const prefs = {};
+    for (const k of PREF_KEYS) prefs[k] = state[k];
+    localStorage.setItem(LS_PREFS, JSON.stringify(prefs));
+}
+
+function loadPrefs() {
+    try {
+        const prefs = JSON.parse(localStorage.getItem(LS_PREFS) || '{}');
+        for (const k of PREF_KEYS) if (prefs[k] !== undefined) state[k] = prefs[k];
+    } catch { /* corrupted prefs — defaults win */ }
+}
+
+// ---------------------------------------------------------------------------
 // Wiring
 // ---------------------------------------------------------------------------
 
 function init() {
+    loadPrefs();
+
     $('signin-btn').addEventListener('click', () => signIn());
     $('reauth-btn').addEventListener('click', () => signIn(''));
 
     $('refresh-btn').addEventListener('click', () => refresh(true));
     $('add-task-btn').addEventListener('click', () => openTaskModal(null));
     $('signout-btn').addEventListener('click', signOut);
+    $('export-btn').addEventListener('click', exportTSV);
 
     $('import-btn').addEventListener('click', openImportModal);
     $('import-text').addEventListener('input', previewImport);
@@ -1062,27 +1234,48 @@ function init() {
     $('import-confirm-btn').addEventListener('click', confirmImport);
     $('import-backdrop').addEventListener('click', (e) => { if (e.target === $('import-backdrop')) closeImportModal(); });
 
-    $('search-input').addEventListener('input', (e) => { state.searchText = e.target.value; renderBoard(); });
+    $('search-input').addEventListener('input', (e) => { state.searchText = e.target.value; savePrefs(); renderBoard(); });
     const setView = (view) => {
         state.view = view;
         $('view-board-btn').classList.toggle('active', view === 'board');
         $('view-timeline-btn').classList.toggle('active', view === 'timeline');
+        savePrefs();
         renderBoard();
     };
     $('view-board-btn').addEventListener('click', () => setView('board'));
     $('view-timeline-btn').addEventListener('click', () => setView('timeline'));
+    const setLang = (lang) => {
+        state.lang = lang;
+        $('lang-toggle').textContent = lang === 'en' ? 'SK' : 'EN';
+        $('lang-toggle').classList.toggle('active', lang === 'en');
+        savePrefs();
+        renderBoard();
+    };
+    $('lang-toggle').addEventListener('click', () => setLang(state.lang === 'en' ? 'sk' : 'en'));
     $('ready-toggle').addEventListener('click', () => {
         state.readyOnly = !state.readyOnly;
         $('ready-toggle').classList.toggle('active', state.readyOnly);
+        savePrefs();
+        renderBoard();
+    });
+    $('due-soon-toggle').addEventListener('click', () => {
+        state.dueSoonOnly = !state.dueSoonOnly;
+        $('due-soon-toggle').classList.toggle('active', state.dueSoonOnly);
+        savePrefs();
         renderBoard();
     });
     $('f-deps-add').addEventListener('change', (e) => {
         if (e.target.value) { modalDeps.push(e.target.value); renderDepsEditor(); }
     });
-    $('filter-epic').addEventListener('change', (e) => { state.filterEpic = e.target.value; renderBoard(); });
-    $('filter-assignee').addEventListener('change', (e) => { state.filterAssignee = e.target.value; renderBoard(); });
-    $('filter-room').addEventListener('change', (e) => { state.filterRoom = e.target.value; renderBoard(); });
-    $('filter-contractor').addEventListener('change', (e) => { state.filterContractor = e.target.value; renderBoard(); });
+    const wireFilter = (id, key) => $(id).addEventListener('change', (e) => {
+        state[key] = e.target.value;
+        savePrefs();
+        renderBoard();
+    });
+    wireFilter('filter-epic', 'filterEpic');
+    wireFilter('filter-assignee', 'filterAssignee');
+    wireFilter('filter-room', 'filterRoom');
+    wireFilter('filter-contractor', 'filterContractor');
 
     $('task-form').addEventListener('submit', submitTaskForm);
     $('cancel-btn').addEventListener('click', closeTaskModal);
@@ -1100,6 +1293,15 @@ function init() {
             refresh(false);
         }
     });
+
+    // Restore persisted UI state into the controls.
+    $('search-input').value = state.searchText;
+    $('ready-toggle').classList.toggle('active', state.readyOnly);
+    $('due-soon-toggle').classList.toggle('active', state.dueSoonOnly);
+    $('view-board-btn').classList.toggle('active', state.view === 'board');
+    $('view-timeline-btn').classList.toggle('active', state.view === 'timeline');
+    $('lang-toggle').textContent = state.lang === 'en' ? 'SK' : 'EN';
+    $('lang-toggle').classList.toggle('active', state.lang === 'en');
 
     showView('login-view');
 }
