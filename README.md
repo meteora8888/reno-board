@@ -9,8 +9,10 @@ PRD: [docs/prd/2026-08-08-reconstruction-kanban-board.md](docs/prd/2026-08-08-re
 
 ## How it works
 
-- `Tasks` tab is the source of truth. Columns `A..N`:
-  `ID, Title, Status, Room, Contractor, Cost Estimate, Cost Actual, Due Date, Priority, Notes, Created, Updated, Epic, Depends On`
+- `Tasks` tab is the source of truth. Columns `A..O`:
+  `ID, Title, Status, Room, Contractor, Cost Estimate, Cost Actual, Due Date, Priority, Notes, Created, Updated, Epic, Depends On, Assignee`
+- `Assignee` is the household member who owns/follows up the task (vs. `Contractor`,
+  the hired company). Shown as an @ tag on cards, with its own filter.
 - `Epic` is a free-text label grouping related tasks (e.g. "Bathroom renovation");
   the board shows it as a card tag and a filter with done-count and cost totals.
 - `Depends On` holds comma-separated predecessor task IDs. Cards with unfinished

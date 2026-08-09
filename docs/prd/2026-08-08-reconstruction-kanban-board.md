@@ -98,3 +98,4 @@ Reconstruction tasks live in a spreadsheet because it's easy to enter data and s
 | 2026-08-09 | Import upserts by ID instead of skipping duplicates | Skipping silently left re-imported rows stale (bit the user with missing epics); overwrite-with-preview is more predictable. |
 | 2026-08-09 | Dependencies as ID list in one column (R15), not a Gantt/graph view | Predecessor IDs + a Ready filter answer "what can I start now" without leaving the kanban form; sequencing visuals can come later if ever needed. |
 | 2026-08-09 | Timeline as dependency waves (R16), not a date-based Gantt | Tasks have no start dates and sparse due dates; topological waves answer "what's first, what's last" honestly from the data that exists. |
+| 2026-08-09 | Assignee column (O) distinct from Contractor; notes previewed on cards | Contractor is the hired company, assignee the household owner who follows up; both matter for a reconstruction. Notes were invisible outside the edit dialog. |

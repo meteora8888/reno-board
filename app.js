@@ -21,7 +21,7 @@ const SHEETS_API = 'https://sheets.googleapis.com/v4/spreadsheets';
 const SCOPES = 'https://www.googleapis.com/auth/spreadsheets';
 
 const TASK_HEADERS = ['ID', 'Title', 'Status', 'Room', 'Contractor', 'Cost Estimate',
-    'Cost Actual', 'Due Date', 'Priority', 'Notes', 'Created', 'Updated', 'Epic', 'Depends On'];
+    'Cost Actual', 'Due Date', 'Priority', 'Notes', 'Created', 'Updated', 'Epic', 'Depends On', 'Assignee'];
 const DEFAULT_STATUSES = ['Backlog', 'Planned', 'In Progress', 'Blocked', 'Done'];
 const DEFAULT_ROOMS = ['Kitchen', 'Living room', 'Bedroom', 'Bathroom', 'Hallway', 'Exterior', 'Whole house'];
 const PRIORITY_ORDER = { High: 0, Medium: 1, Low: 2 };
@@ -37,6 +37,7 @@ const state = {
     filterRoom: '',
     filterContractor: '',
     filterEpic: '',
+    filterAssignee: '',
     searchText: '',
     readyOnly: false,
     view: 'board',      // 'board' | 'timeline'
@@ -162,6 +163,7 @@ function parseTaskRow(row) {
         updated: fromCell(row[11], true),
         epic: fromCell(row[12]),
         deps: fromCell(row[13]).split(/[,;]/).map(s => s.trim()).filter(Boolean),
+        assignee: fromCell(row[14]),
     };
 }
 
@@ -169,7 +171,7 @@ function taskToRow(t) {
     return [t.id, t.title, t.status, t.room, t.contractor,
         t.costEst === '' ? '' : t.costEst, t.costAct === '' ? '' : t.costAct,
         t.due, t.priority, t.notes, t.created, t.updated, t.epic,
-        (t.deps || []).join(', ')];
+        (t.deps || []).join(', '), t.assignee || ''];
 }
 
 function newTaskId() {
@@ -179,7 +181,7 @@ function newTaskId() {
 const nowStamp = () => new Date().toISOString();
 
 async function loadAll() {
-    const ranges = 'ranges=Tasks!A2:N&ranges=Config!A2:B';
+    const ranges = 'ranges=Tasks!A2:O&ranges=Config!A2:B';
     const data = await api(`/${SHEET_ID}/values:batchGet?${ranges}&valueRenderOption=UNFORMATTED_VALUE`);
     const [taskValues, configValues] = data.valueRanges.map(v => v.values || []);
     state.tasks = taskValues.filter(r => fromCell(r[0])).map(parseTaskRow);
@@ -192,7 +194,7 @@ async function loadAll() {
 
 /** Re-read the Tasks tab and find a task's current row by ID (PRD R7). */
 async function locateTask(id) {
-    const data = await api(`/${SHEET_ID}/values/Tasks!A2:N?valueRenderOption=UNFORMATTED_VALUE`);
+    const data = await api(`/${SHEET_ID}/values/Tasks!A2:O?valueRenderOption=UNFORMATTED_VALUE`);
     const rows = data.values || [];
     const idx = rows.findIndex(r => fromCell(r[0]) === id);
     if (idx === -1) return null;
@@ -208,7 +210,7 @@ async function writeTask(original, changes) {
         throw new ConflictError('This task changed in the spreadsheet since you loaded it.');
     }
     const merged = { ...loc.remote, ...changes, updated: nowStamp() };
-    await api(`/${SHEET_ID}/values/Tasks!A${loc.rowNumber}:N${loc.rowNumber}?valueInputOption=RAW`, {
+    await api(`/${SHEET_ID}/values/Tasks!A${loc.rowNumber}:O${loc.rowNumber}?valueInputOption=RAW`, {
         method: 'PUT',
         body: { values: [taskToRow(merged)] },
     });
@@ -216,7 +218,7 @@ async function writeTask(original, changes) {
 }
 
 async function appendTask(task) {
-    await api(`/${SHEET_ID}/values/Tasks!A:N:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS`, {
+    await api(`/${SHEET_ID}/values/Tasks!A:O:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS`, {
         method: 'POST',
         body: { values: [taskToRow(task)] },
     });
@@ -229,7 +231,7 @@ async function archiveTask(original) {
         throw new ConflictError('This task changed in the spreadsheet since you loaded it.');
     }
     const archived = { ...loc.remote, updated: nowStamp() };
-    await api(`/${SHEET_ID}/values/Archive!A:N:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS`, {
+    await api(`/${SHEET_ID}/values/Archive!A:O:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS`, {
         method: 'POST',
         body: { values: [taskToRow(archived)] },
     });
@@ -270,8 +272,8 @@ async function ensureTabs() {
             body: { requests: missing.map(title => ({ addSheet: { properties: { title } } })) },
         });
         const data = [];
-        if (missing.includes('Tasks')) data.push({ range: 'Tasks!A1:N1', values: [TASK_HEADERS] });
-        if (missing.includes('Archive')) data.push({ range: 'Archive!A1:N1', values: [TASK_HEADERS] });
+        if (missing.includes('Tasks')) data.push({ range: 'Tasks!A1:O1', values: [TASK_HEADERS] });
+        if (missing.includes('Archive')) data.push({ range: 'Archive!A1:O1', values: [TASK_HEADERS] });
         if (missing.includes('Config')) {
             const configRows = [['Statuses', 'Rooms']];
             const max = Math.max(DEFAULT_STATUSES.length, DEFAULT_ROOMS.length);
@@ -284,14 +286,15 @@ async function ensureTabs() {
         });
     }
 
-    // Schema upgrade: tabs provisioned before the Epic (M) / Depends On (N) columns
-    // existed lack those headers.
-    const head = await api(`/${SHEET_ID}/values:batchGet?ranges=Tasks!M1:N1&ranges=Archive!M1:N1`);
+    // Schema upgrade: tabs provisioned before the Epic (M) / Depends On (N) /
+    // Assignee (O) columns existed lack those headers.
+    const head = await api(`/${SHEET_ID}/values:batchGet?ranges=Tasks!M1:O1&ranges=Archive!M1:O1`);
     const patches = [];
     for (const [tab, range] of [['Tasks', 0], ['Archive', 1]]) {
         const cells = head.valueRanges[range].values?.[0] || [];
         if (!cells[0]) patches.push({ range: `${tab}!M1`, values: [['Epic']] });
         if (!cells[1]) patches.push({ range: `${tab}!N1`, values: [['Depends On']] });
+        if (!cells[2]) patches.push({ range: `${tab}!O1`, values: [['Assignee']] });
     }
     if (patches.length) {
         await api(`/${SHEET_ID}/values:batchUpdate`, {
@@ -400,7 +403,7 @@ function fold(text) {
 }
 
 function matchesSearch(task, needle) {
-    return [task.title, task.notes, task.contractor, task.epic, task.room]
+    return [task.title, task.notes, task.contractor, task.epic, task.room, task.assignee]
         .some(field => field && fold(field).includes(needle));
 }
 
@@ -411,6 +414,7 @@ function visibleTasks() {
         (!state.filterRoom || t.room === state.filterRoom) &&
         (!state.filterContractor || t.contractor === state.filterContractor) &&
         (!state.filterEpic || t.epic === state.filterEpic) &&
+        (!state.filterAssignee || t.assignee === state.filterAssignee) &&
         (!needle || matchesSearch(t, needle)) &&
         (!state.readyOnly || (t.status !== done && unmetDeps(t).length === 0)));
 }
@@ -433,9 +437,11 @@ function taskSort(a, b) {
 function renderFilters() {
     const contractors = [...new Set(state.tasks.map(t => t.contractor).filter(Boolean))].sort();
     const epics = [...new Set(state.tasks.map(t => t.epic).filter(Boolean))].sort();
+    const assignees = [...new Set(state.tasks.map(t => t.assignee).filter(Boolean))].sort();
     fillSelect($('filter-epic'), epics, 'All epics', state.filterEpic);
     fillSelect($('filter-room'), state.rooms, 'All rooms', state.filterRoom);
     fillSelect($('filter-contractor'), contractors, 'All contractors', state.filterContractor);
+    fillSelect($('filter-assignee'), assignees, 'Anyone', state.filterAssignee);
 }
 
 function fillSelect(select, options, emptyLabel, selected) {
@@ -612,6 +618,7 @@ function renderCard(task) {
     meta.className = 'task-meta';
     if (task.epic) meta.appendChild(tag(task.epic, 'epic'));
     if (task.room) meta.appendChild(tag(task.room, 'room'));
+    if (task.assignee) meta.appendChild(tag(`@ ${task.assignee}`, 'assignee'));
     if (task.contractor) meta.appendChild(tag(task.contractor));
     if (task.priority === 'High') meta.appendChild(tag('High', 'prio-High'));
     if (task.due) meta.appendChild(tag(formatDue(task.due), isOverdue(task) ? 'overdue' : ''));
@@ -625,6 +632,13 @@ function renderCard(task) {
         meta.appendChild(tag('✓ ready', 'ready'));
     }
     if (meta.childElementCount) card.appendChild(meta);
+
+    if (task.notes) {
+        const notes = document.createElement('div');
+        notes.className = 'task-notes';
+        notes.textContent = task.notes;
+        card.appendChild(notes);
+    }
 
     if (task.costEst !== '' || task.costAct !== '') {
         const cost = document.createElement('div');
@@ -746,9 +760,11 @@ function openTaskModal(id) {
     fillSelect($('f-room'), ['', ...rooms], null, task?.room ?? '');
     fillDatalist('contractor-list', state.tasks.map(t => t.contractor));
     fillDatalist('epic-list', state.tasks.map(t => t.epic));
+    fillDatalist('assignee-list', state.tasks.map(t => t.assignee));
 
     $('f-title').value = task?.title ?? '';
     $('f-epic').value = task?.epic ?? '';
+    $('f-assignee').value = task?.assignee ?? '';
     $('f-contractor').value = task?.contractor ?? '';
     $('f-priority').value = task?.priority ?? '';
     $('f-cost-est').value = task?.costEst ?? '';
@@ -789,6 +805,7 @@ function readForm() {
         priority: $('f-priority').value,
         notes: $('f-notes').value.trim(),
         deps: [...modalDeps],
+        assignee: $('f-assignee').value.trim(),
     };
 }
 
@@ -852,6 +869,7 @@ const HEADER_KEYS = {
     duedate: 'due', due: 'due', priority: 'priority', notes: 'notes', epic: 'epic',
     created: 'created', updated: 'updated',
     dependson: 'deps', depends: 'deps', blockedby: 'deps', predecessors: 'deps',
+    assignee: 'assignee', assignedto: 'assignee', owner: 'assignee',
 };
 
 function parseImportCost(raw, warnings, line) {
@@ -940,6 +958,7 @@ function parseTSV(text) {
             updated: now,
             epic: raw.epic || '',
             deps: (raw.deps || '').split(/[,;]/).map(s => s.trim()).filter(Boolean),
+            assignee: raw.assignee || '',
             isUpdate: !!existing,
         });
     }
@@ -992,7 +1011,7 @@ async function confirmImport() {
     $('import-confirm-btn').disabled = true;
     try {
         // Fresh row map so updates land on the row that holds each ID right now (PRD R7).
-        const fresh = await api(`/${SHEET_ID}/values/Tasks!A2:N?valueRenderOption=UNFORMATTED_VALUE`);
+        const fresh = await api(`/${SHEET_ID}/values/Tasks!A2:O?valueRenderOption=UNFORMATTED_VALUE`);
         const rowById = new Map((fresh.values || []).map((r, i) => [fromCell(r[0]), i + 2]));
 
         const toAppend = [];
@@ -1000,7 +1019,7 @@ async function confirmImport() {
         for (const task of tasks) {
             delete task.isUpdate;
             const rowNumber = rowById.get(task.id);
-            if (rowNumber) patches.push({ range: `Tasks!A${rowNumber}:N${rowNumber}`, values: [taskToRow(task)] });
+            if (rowNumber) patches.push({ range: `Tasks!A${rowNumber}:O${rowNumber}`, values: [taskToRow(task)] });
             else toAppend.push(task);
         }
         if (patches.length) {
@@ -1010,7 +1029,7 @@ async function confirmImport() {
             });
         }
         if (toAppend.length) {
-            await api(`/${SHEET_ID}/values/Tasks!A:N:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS`, {
+            await api(`/${SHEET_ID}/values/Tasks!A:O:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS`, {
                 method: 'POST',
                 body: { values: toAppend.map(taskToRow) },
             });
@@ -1061,6 +1080,7 @@ function init() {
         if (e.target.value) { modalDeps.push(e.target.value); renderDepsEditor(); }
     });
     $('filter-epic').addEventListener('change', (e) => { state.filterEpic = e.target.value; renderBoard(); });
+    $('filter-assignee').addEventListener('change', (e) => { state.filterAssignee = e.target.value; renderBoard(); });
     $('filter-room').addEventListener('change', (e) => { state.filterRoom = e.target.value; renderBoard(); });
     $('filter-contractor').addEventListener('change', (e) => { state.filterContractor = e.target.value; renderBoard(); });
 
