@@ -21,7 +21,7 @@ const SHEETS_API = 'https://sheets.googleapis.com/v4/spreadsheets';
 const SCOPES = 'https://www.googleapis.com/auth/spreadsheets';
 
 const TASK_HEADERS = ['ID', 'Title', 'Status', 'Room', 'Contractor', 'Cost Estimate',
-    'Cost Actual', 'Due Date', 'Priority', 'Notes', 'Created', 'Updated', 'Epic'];
+    'Cost Actual', 'Due Date', 'Priority', 'Notes', 'Created', 'Updated', 'Epic', 'Depends On'];
 const DEFAULT_STATUSES = ['Backlog', 'Planned', 'In Progress', 'Blocked', 'Done'];
 const DEFAULT_ROOMS = ['Kitchen', 'Living room', 'Bedroom', 'Bathroom', 'Hallway', 'Exterior', 'Whole house'];
 const PRIORITY_ORDER = { High: 0, Medium: 1, Low: 2 };
@@ -38,6 +38,7 @@ const state = {
     filterContractor: '',
     filterEpic: '',
     searchText: '',
+    readyOnly: false,
     editingId: null,    // task being edited in the modal, null = new task
     lastLoadAt: 0,
 };
@@ -159,13 +160,15 @@ function parseTaskRow(row) {
         created: fromCell(row[10], true),
         updated: fromCell(row[11], true),
         epic: fromCell(row[12]),
+        deps: fromCell(row[13]).split(/[,;]/).map(s => s.trim()).filter(Boolean),
     };
 }
 
 function taskToRow(t) {
     return [t.id, t.title, t.status, t.room, t.contractor,
         t.costEst === '' ? '' : t.costEst, t.costAct === '' ? '' : t.costAct,
-        t.due, t.priority, t.notes, t.created, t.updated, t.epic];
+        t.due, t.priority, t.notes, t.created, t.updated, t.epic,
+        (t.deps || []).join(', ')];
 }
 
 function newTaskId() {
@@ -175,7 +178,7 @@ function newTaskId() {
 const nowStamp = () => new Date().toISOString();
 
 async function loadAll() {
-    const ranges = 'ranges=Tasks!A2:M&ranges=Config!A2:B';
+    const ranges = 'ranges=Tasks!A2:N&ranges=Config!A2:B';
     const data = await api(`/${SHEET_ID}/values:batchGet?${ranges}&valueRenderOption=UNFORMATTED_VALUE`);
     const [taskValues, configValues] = data.valueRanges.map(v => v.values || []);
     state.tasks = taskValues.filter(r => fromCell(r[0])).map(parseTaskRow);
@@ -188,7 +191,7 @@ async function loadAll() {
 
 /** Re-read the Tasks tab and find a task's current row by ID (PRD R7). */
 async function locateTask(id) {
-    const data = await api(`/${SHEET_ID}/values/Tasks!A2:M?valueRenderOption=UNFORMATTED_VALUE`);
+    const data = await api(`/${SHEET_ID}/values/Tasks!A2:N?valueRenderOption=UNFORMATTED_VALUE`);
     const rows = data.values || [];
     const idx = rows.findIndex(r => fromCell(r[0]) === id);
     if (idx === -1) return null;
@@ -204,7 +207,7 @@ async function writeTask(original, changes) {
         throw new ConflictError('This task changed in the spreadsheet since you loaded it.');
     }
     const merged = { ...loc.remote, ...changes, updated: nowStamp() };
-    await api(`/${SHEET_ID}/values/Tasks!A${loc.rowNumber}:M${loc.rowNumber}?valueInputOption=RAW`, {
+    await api(`/${SHEET_ID}/values/Tasks!A${loc.rowNumber}:N${loc.rowNumber}?valueInputOption=RAW`, {
         method: 'PUT',
         body: { values: [taskToRow(merged)] },
     });
@@ -212,7 +215,7 @@ async function writeTask(original, changes) {
 }
 
 async function appendTask(task) {
-    await api(`/${SHEET_ID}/values/Tasks!A:M:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS`, {
+    await api(`/${SHEET_ID}/values/Tasks!A:N:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS`, {
         method: 'POST',
         body: { values: [taskToRow(task)] },
     });
@@ -225,7 +228,7 @@ async function archiveTask(original) {
         throw new ConflictError('This task changed in the spreadsheet since you loaded it.');
     }
     const archived = { ...loc.remote, updated: nowStamp() };
-    await api(`/${SHEET_ID}/values/Archive!A:M:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS`, {
+    await api(`/${SHEET_ID}/values/Archive!A:N:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS`, {
         method: 'POST',
         body: { values: [taskToRow(archived)] },
     });
@@ -266,8 +269,8 @@ async function ensureTabs() {
             body: { requests: missing.map(title => ({ addSheet: { properties: { title } } })) },
         });
         const data = [];
-        if (missing.includes('Tasks')) data.push({ range: 'Tasks!A1:M1', values: [TASK_HEADERS] });
-        if (missing.includes('Archive')) data.push({ range: 'Archive!A1:M1', values: [TASK_HEADERS] });
+        if (missing.includes('Tasks')) data.push({ range: 'Tasks!A1:N1', values: [TASK_HEADERS] });
+        if (missing.includes('Archive')) data.push({ range: 'Archive!A1:N1', values: [TASK_HEADERS] });
         if (missing.includes('Config')) {
             const configRows = [['Statuses', 'Rooms']];
             const max = Math.max(DEFAULT_STATUSES.length, DEFAULT_ROOMS.length);
@@ -280,12 +283,15 @@ async function ensureTabs() {
         });
     }
 
-    // Schema upgrade: tabs provisioned before the Epic column existed lack the M1 header.
-    const head = await api(`/${SHEET_ID}/values:batchGet?ranges=Tasks!M1&ranges=Archive!M1`);
-    const [tasksM1, archiveM1] = head.valueRanges.map(v => v.values?.[0]?.[0] || '');
+    // Schema upgrade: tabs provisioned before the Epic (M) / Depends On (N) columns
+    // existed lack those headers.
+    const head = await api(`/${SHEET_ID}/values:batchGet?ranges=Tasks!M1:N1&ranges=Archive!M1:N1`);
     const patches = [];
-    if (!tasksM1) patches.push({ range: 'Tasks!M1', values: [['Epic']] });
-    if (!archiveM1) patches.push({ range: 'Archive!M1', values: [['Epic']] });
+    for (const [tab, range] of [['Tasks', 0], ['Archive', 1]]) {
+        const cells = head.valueRanges[range].values?.[0] || [];
+        if (!cells[0]) patches.push({ range: `${tab}!M1`, values: [['Epic']] });
+        if (!cells[1]) patches.push({ range: `${tab}!N1`, values: [['Depends On']] });
+    }
     if (patches.length) {
         await api(`/${SHEET_ID}/values:batchUpdate`, {
             method: 'POST',
@@ -361,6 +367,32 @@ function terminalStatus() {
     return state.statuses[state.statuses.length - 1];
 }
 
+function taskById(id) {
+    return state.tasks.find(t => t.id === id);
+}
+
+/** Predecessors of this task that are not Done yet (unknown/archived IDs count as satisfied). */
+function unmetDeps(task) {
+    const done = terminalStatus();
+    return (task.deps || [])
+        .map(taskById)
+        .filter(dep => dep && dep.status !== done);
+}
+
+/** Would making `task.deps = deps` create a dependency cycle? */
+function wouldCycle(taskId, deps) {
+    const visited = new Set();
+    const stack = [...deps];
+    while (stack.length) {
+        const id = stack.pop();
+        if (id === taskId) return true;
+        if (visited.has(id)) continue;
+        visited.add(id);
+        stack.push(...(taskById(id)?.deps || []));
+    }
+    return false;
+}
+
 // Accent-insensitive fold so "buracie" matches "Búracie".
 function fold(text) {
     return text.normalize('NFD').replace(/\p{M}/gu, '').toLowerCase();
@@ -373,17 +405,22 @@ function matchesSearch(task, needle) {
 
 function visibleTasks() {
     const needle = fold(state.searchText.trim());
+    const done = terminalStatus();
     return state.tasks.filter(t =>
         (!state.filterRoom || t.room === state.filterRoom) &&
         (!state.filterContractor || t.contractor === state.filterContractor) &&
         (!state.filterEpic || t.epic === state.filterEpic) &&
-        (!needle || matchesSearch(t, needle)));
+        (!needle || matchesSearch(t, needle)) &&
+        (!state.readyOnly || (t.status !== done && unmetDeps(t).length === 0)));
 }
 
 function taskSort(a, b) {
     const pa = PRIORITY_ORDER[a.priority] ?? 3;
     const pb = PRIORITY_ORDER[b.priority] ?? 3;
     if (pa !== pb) return pa - pb;
+    const ba = unmetDeps(a).length ? 1 : 0;
+    const bb = unmetDeps(b).length ? 1 : 0;
+    if (ba !== bb) return ba - bb; // actionable tasks above blocked ones
     if (a.due !== b.due) {
         if (!a.due) return 1;
         if (!b.due) return -1;
@@ -500,6 +537,15 @@ function renderCard(task) {
     if (task.contractor) meta.appendChild(tag(task.contractor));
     if (task.priority === 'High') meta.appendChild(tag('High', 'prio-High'));
     if (task.due) meta.appendChild(tag(formatDue(task.due), isOverdue(task) ? 'overdue' : ''));
+    const blockers = unmetDeps(task);
+    if (blockers.length) {
+        const t = tag(`⛓ ${blockers.length} waiting`, 'waiting');
+        t.title = 'Waiting on: ' + blockers.map(b => b.title).join(' · ');
+        meta.appendChild(t);
+        card.classList.add('blocked-card');
+    } else if ((task.deps || []).length && task.status !== terminalStatus()) {
+        meta.appendChild(tag('✓ ready', 'ready'));
+    }
     if (meta.childElementCount) card.appendChild(meta);
 
     if (task.costEst !== '' || task.costAct !== '') {
@@ -568,9 +614,50 @@ async function handleWriteError(err) {
 // Task modal
 // ---------------------------------------------------------------------------
 
+let modalDeps = [];
+
+function renderDepsEditor() {
+    const chips = $('f-deps-chips');
+    chips.textContent = '';
+    for (const depId of modalDeps) {
+        const chip = document.createElement('span');
+        chip.className = 'dep-chip';
+        const label = document.createElement('span');
+        label.textContent = taskById(depId)?.title || depId;
+        const remove = document.createElement('button');
+        remove.type = 'button';
+        remove.className = 'dep-remove';
+        remove.textContent = '×';
+        remove.setAttribute('aria-label', 'Remove predecessor');
+        remove.addEventListener('click', () => {
+            modalDeps = modalDeps.filter(d => d !== depId);
+            renderDepsEditor();
+        });
+        chip.append(label, remove);
+        chips.appendChild(chip);
+    }
+    const select = $('f-deps-add');
+    select.textContent = '';
+    const placeholder = document.createElement('option');
+    placeholder.value = '';
+    placeholder.textContent = '+ Add predecessor…';
+    select.appendChild(placeholder);
+    const candidates = state.tasks
+        .filter(t => t.id !== state.editingId && !modalDeps.includes(t.id))
+        .sort((a, b) => a.title.localeCompare(b.title));
+    for (const t of candidates) {
+        const opt = document.createElement('option');
+        opt.value = t.id;
+        opt.textContent = t.epic ? `${t.title} (${t.epic})` : t.title;
+        select.appendChild(opt);
+    }
+}
+
 function openTaskModal(id) {
     state.editingId = id || null;
     const task = id ? state.tasks.find(t => t.id === id) : null;
+    modalDeps = [...(task?.deps || [])];
+    renderDepsEditor();
 
     $('modal-title').textContent = task ? 'Edit task' : 'New task';
     const statuses = task?.status && !state.statuses.includes(task.status)
@@ -623,6 +710,7 @@ function readForm() {
         due: $('f-due').value,
         priority: $('f-priority').value,
         notes: $('f-notes').value.trim(),
+        deps: [...modalDeps],
     };
 }
 
@@ -630,6 +718,10 @@ async function submitTaskForm(e) {
     e.preventDefault();
     const fields = readForm();
     if (!fields.title) return;
+    if (state.editingId && wouldCycle(state.editingId, fields.deps)) {
+        toast('That would create a dependency loop — a task can’t (indirectly) precede itself.', 'error', 6000);
+        return;
+    }
     $('save-btn').disabled = true;
     try {
         if (state.editingId) {
@@ -681,6 +773,7 @@ const HEADER_KEYS = {
     costestimate: 'costEst', estimate: 'costEst', costactual: 'costAct', actual: 'costAct',
     duedate: 'due', due: 'due', priority: 'priority', notes: 'notes', epic: 'epic',
     created: 'created', updated: 'updated',
+    dependson: 'deps', depends: 'deps', blockedby: 'deps', predecessors: 'deps',
 };
 
 function parseImportCost(raw, warnings, line) {
@@ -768,8 +861,17 @@ function parseTSV(text) {
             created: raw.created || existing?.created || now,
             updated: now,
             epic: raw.epic || '',
+            deps: (raw.deps || '').split(/[,;]/).map(s => s.trim()).filter(Boolean),
             isUpdate: !!existing,
         });
+    }
+
+    // Dependency IDs may point at rows later in the paste, so validate after the loop.
+    const knownIds = new Set([...existingById.keys(), ...seenIds]);
+    for (const task of tasks) {
+        for (const dep of task.deps) {
+            if (!knownIds.has(dep)) warnings.push(`${task.id}: depends on unknown ID "${dep}"`);
+        }
     }
     return { tasks, warnings, error: null };
 }
@@ -812,7 +914,7 @@ async function confirmImport() {
     $('import-confirm-btn').disabled = true;
     try {
         // Fresh row map so updates land on the row that holds each ID right now (PRD R7).
-        const fresh = await api(`/${SHEET_ID}/values/Tasks!A2:M?valueRenderOption=UNFORMATTED_VALUE`);
+        const fresh = await api(`/${SHEET_ID}/values/Tasks!A2:N?valueRenderOption=UNFORMATTED_VALUE`);
         const rowById = new Map((fresh.values || []).map((r, i) => [fromCell(r[0]), i + 2]));
 
         const toAppend = [];
@@ -820,7 +922,7 @@ async function confirmImport() {
         for (const task of tasks) {
             delete task.isUpdate;
             const rowNumber = rowById.get(task.id);
-            if (rowNumber) patches.push({ range: `Tasks!A${rowNumber}:M${rowNumber}`, values: [taskToRow(task)] });
+            if (rowNumber) patches.push({ range: `Tasks!A${rowNumber}:N${rowNumber}`, values: [taskToRow(task)] });
             else toAppend.push(task);
         }
         if (patches.length) {
@@ -830,7 +932,7 @@ async function confirmImport() {
             });
         }
         if (toAppend.length) {
-            await api(`/${SHEET_ID}/values/Tasks!A:M:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS`, {
+            await api(`/${SHEET_ID}/values/Tasks!A:N:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS`, {
                 method: 'POST',
                 body: { values: toAppend.map(taskToRow) },
             });
@@ -864,6 +966,14 @@ function init() {
     $('import-backdrop').addEventListener('click', (e) => { if (e.target === $('import-backdrop')) closeImportModal(); });
 
     $('search-input').addEventListener('input', (e) => { state.searchText = e.target.value; renderBoard(); });
+    $('ready-toggle').addEventListener('click', () => {
+        state.readyOnly = !state.readyOnly;
+        $('ready-toggle').classList.toggle('active', state.readyOnly);
+        renderBoard();
+    });
+    $('f-deps-add').addEventListener('change', (e) => {
+        if (e.target.value) { modalDeps.push(e.target.value); renderDepsEditor(); }
+    });
     $('filter-epic').addEventListener('change', (e) => { state.filterEpic = e.target.value; renderBoard(); });
     $('filter-room').addEventListener('change', (e) => { state.filterRoom = e.target.value; renderBoard(); });
     $('filter-contractor').addEventListener('change', (e) => { state.filterContractor = e.target.value; renderBoard(); });
