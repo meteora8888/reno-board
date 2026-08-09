@@ -39,6 +39,7 @@ const state = {
     filterEpic: '',
     searchText: '',
     readyOnly: false,
+    view: 'board',      // 'board' | 'timeline'
     editingId: null,    // task being edited in the modal, null = new task
     lastLoadAt: 0,
 };
@@ -455,9 +456,17 @@ function fillSelect(select, options, emptyLabel, selected) {
 }
 
 function renderBoard() {
+    const tasks = visibleTasks();
+    $('board').classList.toggle('hidden', state.view !== 'board');
+    $('timeline').classList.toggle('hidden', state.view !== 'timeline');
+    if (state.view === 'timeline') renderTimeline(tasks);
+    else renderBoardColumns(tasks);
+    renderCostSummary(tasks);
+}
+
+function renderBoardColumns(tasks) {
     const board = $('board');
     board.textContent = '';
-    const tasks = visibleTasks();
 
     // Defensive extra column for statuses that exist in data but not in Config.
     const known = new Set(state.statuses);
@@ -468,7 +477,76 @@ function renderBoard() {
         const inColumn = tasks.filter(t => t.status === status).sort(taskSort);
         board.appendChild(renderColumn(status, inColumn));
     }
-    renderCostSummary(tasks);
+}
+
+/**
+ * Dependency depth of every task: 0 = no predecessors (can start first),
+ * n = one more than its deepest predecessor. Cycle-safe; unknown IDs ignored.
+ */
+function depLevels() {
+    const memo = new Map();
+    function level(task, stack) {
+        if (memo.has(task.id)) return memo.get(task.id);
+        if (stack.has(task.id)) return 0;
+        stack.add(task.id);
+        const parents = (task.deps || []).map(taskById).filter(Boolean);
+        const lv = parents.length ? 1 + Math.max(...parents.map(p => level(p, stack))) : 0;
+        stack.delete(task.id);
+        memo.set(task.id, lv);
+        return lv;
+    }
+    for (const t of state.tasks) level(t, new Set());
+    return memo;
+}
+
+function renderTimeline(tasks) {
+    const container = $('timeline');
+    container.textContent = '';
+    if (!tasks.length) {
+        const empty = document.createElement('div');
+        empty.className = 'empty-note';
+        empty.textContent = 'No tasks match the current filters.';
+        container.appendChild(empty);
+        return;
+    }
+
+    const levels = depLevels();
+    const maxLevel = Math.max(...tasks.map(t => levels.get(t.id) ?? 0));
+    const done = terminalStatus();
+
+    for (let lv = 0; lv <= maxLevel; lv++) {
+        const inWave = tasks.filter(t => (levels.get(t.id) ?? 0) === lv).sort(taskSort);
+        if (!inWave.length) continue;
+
+        const wave = document.createElement('section');
+        wave.className = 'wave';
+
+        const header = document.createElement('div');
+        header.className = 'wave-header';
+        const name = document.createElement('span');
+        name.className = 'wave-title';
+        name.textContent = lv === 0 ? 'Wave 1 — can start first'
+            : lv === maxLevel ? `Wave ${lv + 1} — finishes last`
+            : `Wave ${lv + 1}`;
+        const info = document.createElement('span');
+        info.className = 'wave-info';
+        const doneCount = inWave.filter(t => t.status === done).length;
+        const est = inWave.reduce((s, t) => s + (t.costEst || 0), 0);
+        info.textContent = `${doneCount}/${inWave.length} done` + (est ? ` · ${eur.format(est)} est` : '');
+        header.append(name, info);
+        wave.appendChild(header);
+
+        const cards = document.createElement('div');
+        cards.className = 'wave-cards';
+        for (const task of inWave) {
+            const card = renderCard(task);
+            card.draggable = false;
+            if (task.status === done) card.classList.add('done-card');
+            cards.appendChild(card);
+        }
+        wave.appendChild(cards);
+        container.appendChild(wave);
+    }
 }
 
 function renderCostSummary(tasks) {
@@ -966,6 +1044,14 @@ function init() {
     $('import-backdrop').addEventListener('click', (e) => { if (e.target === $('import-backdrop')) closeImportModal(); });
 
     $('search-input').addEventListener('input', (e) => { state.searchText = e.target.value; renderBoard(); });
+    const setView = (view) => {
+        state.view = view;
+        $('view-board-btn').classList.toggle('active', view === 'board');
+        $('view-timeline-btn').classList.toggle('active', view === 'timeline');
+        renderBoard();
+    };
+    $('view-board-btn').addEventListener('click', () => setView('board'));
+    $('view-timeline-btn').addEventListener('click', () => setView('timeline'));
     $('ready-toggle').addEventListener('click', () => {
         state.readyOnly = !state.readyOnly;
         $('ready-toggle').classList.toggle('active', state.readyOnly);

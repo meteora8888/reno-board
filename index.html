@@ -7,7 +7,7 @@
     <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' https://accounts.google.com; style-src 'self' 'unsafe-inline' https://accounts.google.com; connect-src 'self' https://sheets.googleapis.com https://accounts.google.com; frame-src https://accounts.google.com; img-src 'self' data:; font-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'; object-src 'none';">
     <!-- Bump ?v= on every deploy that touches app.js/styles.css — it pins the assets
          to this HTML so a cached JS can never mismatch a fresh page. -->
-    <link rel="stylesheet" href="styles.css?v=7">
+    <link rel="stylesheet" href="styles.css?v=8">
     <script src="https://accounts.google.com/gsi/client" async defer></script>
 </head>
 <body>
@@ -28,6 +28,10 @@
         <header class="topbar">
             <div class="topbar-left">
                 <span class="brand small-brand">Reno Board</span>
+                <div class="seg" role="tablist" aria-label="View">
+                    <button id="view-board-btn" class="seg-btn active">Board</button>
+                    <button id="view-timeline-btn" class="seg-btn">Timeline</button>
+                </div>
                 <a id="open-sheet-link" class="hint-link" target="_blank" rel="noopener">open sheet ↗</a>
             </div>
             <div class="topbar-filters">
@@ -51,6 +55,7 @@
         </div>
 
         <section id="board" class="board" aria-label="Kanban board"></section>
+        <section id="timeline" class="timeline hidden" aria-label="Dependency timeline"></section>
     </main>
 
     <!-- ============ TASK MODAL ============ -->
@@ -141,6 +146,6 @@
 
     <div id="toast-container" class="toast-container" aria-live="polite"></div>
 
-    <script src="app.js?v=7"></script>
+    <script src="app.js?v=8"></script>
 </body>
 </html>

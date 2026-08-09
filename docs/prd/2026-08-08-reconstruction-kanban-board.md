@@ -58,6 +58,7 @@ Reconstruction tasks live in a spreadsheet because it's easy to enter data and s
 13. **R13 — Epics as labels.** Each task can carry a free-text `Epic` label grouping related tasks. Cards display it as a tag; the board can filter by epic, showing done-count and cost totals for the group. No hierarchy, roll-up statuses, or subtasks.
 14. **R14 — TSV import.** The board can import tasks from pasted TSV. The first row must be a header naming at least `Title`; recognized columns map by name in any order, unknown columns are ignored. Missing IDs/timestamps are generated; rows whose ID already exists update that task in place (upsert); malformed costs/dates and unknown statuses/rooms/priorities produce warnings shown before import, never silent data mangling. All writes are batched.
 15. **R15 — Task dependencies.** A task can list predecessor task IDs (`Depends On`). Cards with unfinished predecessors show a "waiting" badge (with the blocker titles) and sort below actionable tasks of the same priority; a "Ready" toggle filters to tasks whose predecessors are all done. Dependency cycles are rejected at save; references to archived/unknown IDs count as satisfied.
+16. **R16 — Timeline view.** A second view arranges tasks into dependency waves: Wave 1 has no predecessors, wave n+1 depends on wave n, the last wave finishes the project. Each wave shows done-count and estimated cost; done tasks stay visible but muted. All filters/search apply; the view toggle sits in the top bar.
 
 ## UX Notes
 
@@ -96,3 +97,4 @@ Reconstruction tasks live in a spreadsheet because it's easy to enter data and s
 | 2026-08-09 | TSV paste import (R14) supersedes the "no migration tooling" non-goal | The user migrates their pre-existing task list via LLM-generated TSV; paste-with-preview is the cheapest safe path in. |
 | 2026-08-09 | Import upserts by ID instead of skipping duplicates | Skipping silently left re-imported rows stale (bit the user with missing epics); overwrite-with-preview is more predictable. |
 | 2026-08-09 | Dependencies as ID list in one column (R15), not a Gantt/graph view | Predecessor IDs + a Ready filter answer "what can I start now" without leaving the kanban form; sequencing visuals can come later if ever needed. |
+| 2026-08-09 | Timeline as dependency waves (R16), not a date-based Gantt | Tasks have no start dates and sparse due dates; topological waves answer "what's first, what's last" honestly from the data that exists. |
